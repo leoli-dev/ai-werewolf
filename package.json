@@ -4,6 +4,13 @@
   "private": true,
   "type": "module",
   "description": "网页版单人狼人杀：真人玩家 vs 11 个 AI NPC，2.5D 像素小镇",
+  "license": "MIT",
+  "author": "Leo Li",
+  "homepage": "https://leoli-dev.github.io/ai-werewolf/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leoli-dev/ai-werewolf.git"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

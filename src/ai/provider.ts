@@ -53,6 +53,9 @@ export function keyMayGoTo(provider: ProviderId, baseUrl: string): boolean {
   }
 }
 
+/** The `/__llm` proxy only exists on the Vite dev server (not in a static build such as GitHub Pages). */
+export const PROXY_AVAILABLE = import.meta.env?.DEV === true;
+
 export class OpenAICompatibleProvider {
   constructor(public config: ProviderConfig, private keySource?: KeySource) {}
 
@@ -72,7 +75,7 @@ export class OpenAICompatibleProvider {
     const key = await this.key();
     if (key) headers.Authorization = `Bearer ${key}`;
     const base = this.config.baseUrl.replace(/\/+$/, '');
-    if (this.config.useProxy) {
+    if (this.config.useProxy && PROXY_AVAILABLE) {
       headers['x-llm-base'] = base;
       return { url: `/__llm${path}`, headers };
     }

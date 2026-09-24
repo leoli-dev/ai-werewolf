@@ -1,5 +1,5 @@
 import { PROVIDERS, PROVIDER_IDS, effortsFor } from '../ai/catalog';
-import { OpenAICompatibleProvider } from '../ai/provider';
+import { OpenAICompatibleProvider, PROXY_AVAILABLE } from '../ai/provider';
 import { envProvider } from '../config';
 import { vault } from '../keyVault';
 import { getConfig, localDefaults, onConfigChange, resolveProvider, setActiveProvider, updateConfig, updateProfile } from '../settings';
@@ -156,7 +156,10 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
           h('label', {}, '发言推理'), h('div', { class: 'inline' }, effortSel('reasoning', '发言推理'), spec?.defaultEffort ? hintText(`官方默认 ${spec.defaultEffort}`) : null),
           h('label', {}, '决策推理'), h('div', { class: 'inline' }, effortSel('decisionReasoning', '决策推理'), hintText('投票 / 夜间技能 / 狼队沟通，调低可明显提速')),
           h('label', {}, preset.needsKey ? 'API Key' : 'API Key（可选）'), keyRow,
-          h('label', {}, '跨域代理'), h('label', { class: 'check' }, proxy, '经开发服务器转发（避免浏览器跨域限制）'),
+          h('label', {}, '跨域代理'),
+          PROXY_AVAILABLE
+            ? h('label', { class: 'check' }, proxy, '经开发服务器转发（避免浏览器跨域限制）')
+            : hintText('静态网页版直连服务商；本地服务需允许跨域（CORS），或 clone 后用 npm run dev'),
         ),
         h(
           'div',

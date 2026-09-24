@@ -62,6 +62,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [llmProxy(env)],
     define: { __LLM_ENV__: JSON.stringify(browserEnv) },
+    // relative asset paths: the build works under any sub-path (GitHub Pages: /<repo>/)
+    base: './',
     server: { port: 5173 },
   };
 });
