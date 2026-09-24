@@ -40,10 +40,27 @@ const ACTION_TITLE: Record<TargetRequest['action'], string> = {
 
 type Tab = 'round' | 'all' | 'wolf' | 'private';
 
-/** One distinct bubble colour per seat (12 hues 30° apart), reused in the chat log. */
+/**
+ * One clearly different bubble colour per seat (12 distinct colour families,
+ * ordered so neighbouring seats never look alike), reused in the chat log.
+ */
+const BUBBLE_COLORS: { bg: string; edge: string }[] = [
+  { bg: '#ffd95e', edge: '#8a6a00' }, // 1 yellow
+  { bg: '#7ab8ff', edge: '#1f4f8a' }, // 2 blue
+  { bg: '#ff8f85', edge: '#9a2a22' }, // 3 red
+  { bg: '#7fdc98', edge: '#1f6b36' }, // 4 green
+  { bg: '#d4a4ff', edge: '#5e2a8f' }, // 5 purple
+  { bg: '#ffb066', edge: '#8f4c0a' }, // 6 orange
+  { bg: '#74e0e0', edge: '#0f6666' }, // 7 cyan
+  { bg: '#ff9fd0', edge: '#8f2a5f' }, // 8 pink
+  { bg: '#c8e67a', edge: '#4f6a10' }, // 9 lime
+  { bg: '#aeb4ff', edge: '#2e3490' }, // 10 periwinkle
+  { bg: '#e2c49c', edge: '#6a4a24' }, // 11 tan
+  { bg: '#eeeeea', edge: '#55554f' }, // 12 light grey
+];
+
 export function bubbleColor(id: number) {
-  const hue = [0, 30, 52, 90, 140, 172, 196, 218, 248, 276, 302, 330][id % 12];
-  return { bg: `hsl(${hue} 60% 87%)`, edge: `hsl(${hue} 50% 32%)` };
+  return BUBBLE_COLORS[id % BUBBLE_COLORS.length];
 }
 
 function bubbleStyle(id: number) {
