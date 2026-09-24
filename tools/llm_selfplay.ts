@@ -1,0 +1,48 @@
+/**
+ * Headless all-AI game against a real OpenAI-compatible endpoint, to check
+ * prompt quality and per-phase latency without the browser.
+ * Usage: npx tsx tools/llm_selfplay.ts [seed] [wolfChatRounds]
+ */
+import { LLMAgent } from '../src/ai/llmAgent';
+import { PERSONAS } from '../src/ai/prompts';
+import { DEFAULT_PROVIDER, OpenAICompatibleProvider, SerialQueue } from '../src/ai/provider';
+import { Game } from '../src/game/game';
+import { ROLE_NAME, seat } from '../src/game/types';
+
+const seed = Number(process.argv[2] ?? 1);
+const rounds = Number(process.argv[3] ?? 5);
+const provider = new OpenAICompatibleProvider({ ...DEFAULT_PROVIDER, useProxy: false });
+const queue = new SerialQueue();
+const stats: Record<string, number[]> = {};
+let failures = 0;
+
+const game = new Game(
+  { names: PERSONAS.map((p) => p.name), humanSeat: -1, seed, wolfChatRounds: rounds },
+  {
+    onEvent: (e) => {
+      if (e.type === 'system') return;
+      const who = e.speaker !== undefined ? `${seat(e.speaker)}(${ROLE_NAME[game.players[e.speaker].role]}) ` : '';
+      const vis = e.visibility.kind === 'private' ? `[→${e.visibility.to.map((i) => i + 1).join(',')}] ` : '';
+      console.log(`D${e.day} ${e.type.padEnd(8)} ${vis}${who}${e.text}`);
+    },
+  },
+);
+game.setAgents(
+  PERSONAS.map((p, i) =>
+    new LLMAgent(i, p, provider, queue, {
+      onCall: (c) => {
+        if (!c.ok) {
+          failures++;
+          console.log(`   !! call failed ${seat(c.player)} ${c.kind}: ${c.error}`);
+        } else (stats[c.kind] ??= []).push(c.ms);
+      },
+    }),
+  ),
+);
+const t0 = Date.now();
+const winner = await game.run();
+console.log(`\nWINNER: ${winner}  total ${(Date.now() - t0) / 1000}s  failures=${failures}`);
+for (const [k, v] of Object.entries(stats)) {
+  const avg = v.reduce((a, b) => a + b, 0) / v.length;
+  console.log(`${k.padEnd(12)} n=${String(v.length).padStart(3)} avg=${(avg / 1000).toFixed(1)}s max=${(Math.max(...v) / 1000).toFixed(1)}s`);
+}
