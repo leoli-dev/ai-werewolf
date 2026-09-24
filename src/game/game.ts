@@ -392,9 +392,9 @@ export class Game {
         let passes = 0;
         for (const w of wolves) {
           const text = (await this.ask(w.id, { kind: 'wolfChat', round, rounds: this.wolfChatRounds, day }, `狼队沟通 ${round}/${this.wolfChatRounds}`)) as string;
-          const pass = /^\s*(pass|PASS|过|结束)\s*[。.]?\s*$/.test(text);
-          if (pass) passes++;
-          this.emit('wolfChat', pass ? '（没有补充）' : text, channel, { speaker: w.id });
+          const bare = isPass(text);
+          if (bare || /^\s*(pass|过)/i.test(text) || (text.length <= 30 && /没有?补充|没意见|pass/i.test(text))) passes++;
+          this.emit('wolfChat', bare ? '（没有补充）' : text, channel, { speaker: w.id });
         }
         if (passes === wolves.length) break;
       }
@@ -521,6 +521,10 @@ export class Game {
     const max = Math.max(...[...tally.values()].map((v) => v.length));
     return [...tally.entries()].filter(([, v]) => v.length === max).map(([t]) => t);
   }
+}
+
+export function isPass(text: string): boolean {
+  return /^\s*(pass|过|结束)\s*[。.!！]?\s*$/i.test(text);
 }
 
 export function canSee(v: Visibility, id: number): boolean {

@@ -33,7 +33,15 @@ export interface ChatResult {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
-export class ProviderError extends Error {}
+export class ProviderError extends Error {
+  constructor(message: string, readonly status = 0) {
+    super(message);
+  }
+  /** Server overload / OOM (e.g. MTPLX 507) or network blips are worth retrying after a pause. */
+  get retryable() {
+    return this.status === 0 || this.status === 429 || this.status >= 500;
+  }
+}
 
 export class OpenAICompatibleProvider {
   constructor(public config: ProviderConfig) {}
@@ -65,12 +73,12 @@ export class OpenAICompatibleProvider {
       try {
         json = JSON.parse(text);
       } catch {
-        throw new ProviderError(`HTTP ${res.status}: 非 JSON 响应 ${text.slice(0, 200)}`);
+        throw new ProviderError(`HTTP ${res.status}: 非 JSON 响应 ${text.slice(0, 200)}`, res.status);
       }
-      if (!res.ok) throw new ProviderError(`HTTP ${res.status}: ${json?.error?.message ?? text.slice(0, 200)}`);
+      if (!res.ok) throw new ProviderError(`HTTP ${res.status}: ${json?.error?.message ?? text.slice(0, 200)}`, res.status);
       return json;
     } catch (e) {
-      if ((e as Error).name === 'AbortError') throw new ProviderError(`请求超时（${Math.round(timeoutMs / 1000)}s）`);
+      if ((e as Error).name === 'AbortError') throw new ProviderError(`请求超时（${Math.round(timeoutMs / 1000)}s）`, 408);
       if (e instanceof ProviderError) throw e;
       throw new ProviderError(`网络错误：${(e as Error).message}`);
     } finally {

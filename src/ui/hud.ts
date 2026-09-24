@@ -54,6 +54,9 @@ export class GameUI {
   private playerFilter: number | null = null;
   private pendingTarget: { req: TargetRequest; select: (id: number) => void } | null = null;
   private lastPhase = '';
+  private actorKey = '';
+  private actorSince = 0;
+  private actorTimer = 0;
   readonly agent: Agent;
 
   constructor(
@@ -153,6 +156,7 @@ export class GameUI {
   }
 
   destroy() {
+    clearInterval(this.actorTimer);
     for (const el of [...this.root.children]) el.remove();
     this.labelsRoot.replaceChildren();
     this.stage.onFrame = undefined;
@@ -191,12 +195,28 @@ export class GameUI {
     if (s.actor !== null) {
       // at night only reveal who acts if it is you (or god view)
       const hidden = night && s.actor !== this.me && !this.godView;
-      actorEl.replaceChildren(
-        hidden ? '夜幕下有人在行动' : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
-        h('span', { class: 'dots' }),
-      );
+      const actorKey = `${s.actor}:${s.actorLabel}`;
+      if (actorKey !== this.actorKey) {
+        this.actorKey = actorKey;
+        this.actorSince = performance.now();
+        const timer = h('span', { class: 'timer' });
+        actorEl.replaceChildren(
+          hidden ? '夜幕下有人在行动' : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
+          h('span', { class: 'dots' }),
+          s.actor === this.me ? '' : timer,
+        );
+        clearInterval(this.actorTimer);
+        this.actorTimer = window.setInterval(() => {
+          const sec = Math.floor((performance.now() - this.actorSince) / 1000);
+          timer.textContent = sec >= 3 ? ` ${sec}s` : '';
+        }, 500);
+      }
       if (hidden) this.stage.focus(null);
-    } else actorEl.textContent = '';
+    } else {
+      this.actorKey = '';
+      clearInterval(this.actorTimer);
+      actorEl.textContent = '';
+    }
     const phaseKey = `${s.day}:${s.phase}`;
     if (phaseKey !== this.lastPhase) {
       this.lastPhase = phaseKey;

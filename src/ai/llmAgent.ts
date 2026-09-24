@@ -2,7 +2,7 @@ import type { Agent, PlayerView, SpeechRequest, TargetRequest, WolfChatRequest }
 import { seat } from '../game/types';
 import { MockAgent } from './mockAgent';
 import { cleanSpeech, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
-import type { ChatMessage, OpenAICompatibleProvider, SerialQueue } from './provider';
+import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
 
 export interface AgentTelemetry {
   onCall?(info: { player: number; kind: string; ms: number; ok: boolean; error?: string }): void;
@@ -40,7 +40,10 @@ export class LLMAgent implements Agent {
 
   private async call(kind: string, msgs: ChatMessage[], maxTokens: number): Promise<string> {
     let lastErr = '';
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // back off on overload (e.g. local server 507 OOM under memory pressure)
+    const delays = [0, 5000, 15000];
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
       try {
         const r = await this.queue.run(() => this.provider.chat(msgs, { maxTokens }));
         this.telemetry.onCall?.({ player: this.id, kind, ms: r.ms, ok: true });
@@ -49,6 +52,7 @@ export class LLMAgent implements Agent {
       } catch (e) {
         lastErr = (e as Error).message;
         this.telemetry.onCall?.({ player: this.id, kind, ms: 0, ok: false, error: lastErr });
+        if (e instanceof ProviderError && !e.retryable) break;
       }
     }
     throw new Error(lastErr);

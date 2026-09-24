@@ -87,6 +87,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 #banner .actor .dots::after { content: ''; animation: dots 1.2s steps(4) infinite; }
 @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
 
+#banner .actor .timer { font-family: var(--pixel); font-size: 10px; color: var(--ink-faint); margin-left: 4px; }
+
 #topright { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }
 
 /* ── chat / transcript (right) ── */
