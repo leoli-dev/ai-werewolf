@@ -328,7 +328,12 @@ export class Game {
     if (req.kind === 'target') rec = { t: await agent.choose(req, view) };
     else {
       const res = await agent.speak(req, view);
-      rec = typeof res === 'string' ? { s: res } : res.fallback ? { s: res.text, fb: true } : { s: res.text };
+      if (typeof res === 'string') rec = { s: res };
+      else {
+        rec = { s: res.text };
+        if (res.fallback) rec.fb = true;
+        if (res.explode && req.kind === 'speech' && req.canExplode) rec.x = true;
+      }
     }
     this.guard();
     // journal before waiting out a pause, so a save made meanwhile keeps this answer
@@ -356,6 +361,7 @@ export class Game {
         return choice;
       }
       this.lastSpeechFallback = !!rec.fb;
+      this.lastSpeechExplode = !!rec.x;
       return rec.s.trim() || '（沉默）';
     } finally {
       this.setActor(null);
@@ -371,7 +377,8 @@ export class Game {
     const p = this.players[id];
     if (!p.alive) return;
     p.alive = false;
-    this.emit('death', `${seat(id)} ${p.name} 出局`, { kind: 'public' }, { data: { id, cause: cause === 'vote' ? 'vote' : 'hidden' } });
+    const shown = cause === 'vote' || cause === 'explode' ? cause : 'hidden';
+    this.emit('death', `${seat(id)} ${p.name} 出局`, { kind: 'public' }, { data: { id, cause: shown } });
   }
 
   /** Returns true if the game ended. */
@@ -516,6 +523,7 @@ export class Game {
 
   private nightDeaths: number[] = [];
   private lastSpeechFallback = false;
+  private lastSpeechExplode = false;
 
   private async wolfTurn(): Promise<number | null> {
     const wolves = this.wolves().filter((w) => w.alive);
@@ -585,10 +593,19 @@ export class Game {
     return false;
   }
 
-  private async speech(id: number, purpose: SpeechKind, label: string, seq: SpeechOrder = {}) {
-    const text = (await this.ask(id, { kind: 'speech', purpose, day: this.state.day, ...seq }, label)) as string;
-    this.emit('speech', text, { kind: 'public' }, { speaker: id, speechKind: purpose, data: this.lastSpeechFallback ? { fallback: true } : undefined });
-    await this.pace();
+  /** Returns true if the speaker (a wolf) self-destructed: the day ends at once. */
+  private async speech(id: number, purpose: SpeechKind, label: string, seq: SpeechOrder = {}): Promise<boolean> {
+    const canExplode = purpose !== 'lastWords' && this.players[id].role === 'werewolf';
+    const text = (await this.ask(id, { kind: 'speech', purpose, day: this.state.day, ...seq, ...(canExplode ? { canExplode } : {}) }, label)) as string;
+    const explode = canExplode && this.lastSpeechExplode;
+    const data = { ...(this.lastSpeechFallback ? { fallback: true } : {}), ...(explode ? { explode: true } : {}) };
+    if (!(explode && isPass(text))) this.emit('speech', text, { kind: 'public' }, { speaker: id, speechKind: purpose, data: Object.keys(data).length ? data : undefined });
+    if (explode) {
+      this.gm(`${seat(id)} ${this.players[id].name} 自爆，身份是狼人！本轮剩余发言与投票取消，直接进入黑夜。`);
+      this.kill(id, 'explode');
+    }
+    await this.pace(explode ? 2 : 1);
+    return explode;
   }
 
   private async dayPhase() {
@@ -608,12 +625,12 @@ export class Game {
     const spoken: number[] = [];
     for (const id of order) {
       if (!this.players[id].alive) continue;
-      await this.speech(id, 'discussion', '发言中', { order, spoken: [...spoken], first, clockwise });
+      if (await this.speech(id, 'discussion', '发言中', { order, spoken: [...spoken], first, clockwise })) return;
       spoken.push(id);
     }
     if (this.players[first].alive) {
       this.gm(`请首位发言的 ${seat(first)} 做归纳总结。`);
-      await this.speech(first, 'summary', '归纳总结', { order, spoken, first, clockwise });
+      if (await this.speech(first, 'summary', '归纳总结', { order, spoken, first, clockwise })) return;
     }
 
     // 投票
@@ -624,7 +641,7 @@ export class Game {
       this.gm(`${out.map(seat).join('、')} 平票，请平票玩家依次发言为自己正名。`);
       const defended: number[] = [];
       for (const id of out) {
-        await this.speech(id, 'defense', '平票正名', { order: out, spoken: [...defended] });
+        if (await this.speech(id, 'defense', '平票正名', { order: out, spoken: [...defended] })) return;
         defended.push(id);
       }
       this.gm('请在平票玩家中再次投票。');

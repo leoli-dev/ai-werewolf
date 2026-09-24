@@ -1,7 +1,7 @@
 import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, WolfChatRequest } from '../game/types';
 import { seat } from '../game/types';
 import { MockAgent, type MockSnapshot } from './mockAgent';
-import { cleanSpeech, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
+import { cleanSpeech, parseExplode, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
 import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
 
 export interface AgentTelemetry {
@@ -96,10 +96,16 @@ export class LLMAgent implements Agent {
         // wolf chat is frequent and short: use the (cheaper) decision reasoning level
         const reasoning = req.kind === 'wolfChat' ? this.provider.config.decisionReasoning : undefined;
         const raw = await this.call(kind, this.messages(view, speechTask(req, view)), req.kind === 'wolfChat' ? 800 : 2000, reasoning);
+        if (req.kind === 'speech' && req.canExplode) {
+          const { text, explode } = parseExplode(cleanSpeech(raw, view, this.persona.name));
+          if (explode) return { text: text || '过', explode };
+          return text;
+        }
         return cleanSpeech(raw, view, this.persona.name);
       } catch (e) {
         if (await this.shouldRetry(kind, (e as Error).message)) continue;
-        return { text: await this.fallback.speak(req, view) as string, fallback: true };
+        const r = await this.fallback.speak(req, view);
+        return typeof r === 'string' ? { text: r, fallback: true } : { ...r, fallback: true };
       }
     }
   }

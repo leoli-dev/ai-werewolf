@@ -1,5 +1,5 @@
 import { Rng } from '../game/rng';
-import { ROLE_NAME, seat, type Agent, type Role, type PlayerView, type SpeechRequest, type TargetRequest, type WolfChatRequest } from '../game/types';
+import { ROLE_NAME, seat, type Agent, type Role, type PlayerView, type SpeechRequest, type SpeechResult, type TargetRequest, type WolfChatRequest } from '../game/types';
 
 export interface MockSnapshot {
   rng: number;
@@ -53,8 +53,21 @@ export class MockAgent implements Agent {
     return best;
   }
 
-  async speak(req: SpeechRequest | WolfChatRequest, v: PlayerView): Promise<string> {
+  /** A wolf called out as 查杀 (or by 3+ speakers today) sometimes self-destructs to cut the day short. */
+  private cornered(v: PlayerView): boolean {
+    const me = seat(v.self.id);
+    const hits = v.events.filter(
+      (e) => e.type === 'speech' && e.day === v.day && e.speaker !== v.self.id && e.text.includes(me) && /查杀|是狼/.test(e.text),
+    );
+    const checked = hits.some((e) => new RegExp(`查杀\\s*${me}|${me}\\s*是狼`).test(e.text));
+    return (checked || hits.length >= 3) && this.rng.next() < 0.25;
+  }
+
+  async speak(req: SpeechRequest | WolfChatRequest, v: PlayerView): Promise<SpeechResult> {
     await this.wait();
+    if (req.kind === 'speech' && req.canExplode && this.cornered(v)) {
+      return { text: '算了，不装了，我就是狼。你们好人慢慢猜吧。', explode: true };
+    }
     const others = v.players.filter((p) => p.alive && p.id !== v.self.id).map((p) => p.id);
     if (req.kind === 'wolfChat') {
       if (req.round > 1) return 'pass';

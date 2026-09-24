@@ -32,7 +32,7 @@ export interface Player {
   isHuman: boolean;
 }
 
-export type DeathCause = 'wolf' | 'poison' | 'hunter' | 'vote' | 'gm';
+export type DeathCause = 'wolf' | 'poison' | 'hunter' | 'vote' | 'explode' | 'gm';
 
 export type Phase =
   | 'setup'
@@ -90,6 +90,8 @@ export interface SpeechRequest {
   /** Discussion only: who opened the round and in which direction it goes. */
   first?: number;
   clockwise?: boolean;
+  /** The speaker is a wolf on a day turn: they may self-destruct (自爆) instead of just speaking. */
+  canExplode?: boolean;
 }
 
 /** Where a speaker stands in the current speaking sequence. */
@@ -130,14 +132,17 @@ export interface PlayerView {
   guard?: { lastGuarded: number | null };
 }
 
-/** `fallback` marks text produced by the rule AI instead of the model. */
-export type SpeechResult = string | { text: string; fallback?: boolean };
+/**
+ * `fallback` marks text produced by the rule AI instead of the model; `explode`
+ * means the wolf self-destructs after these words (only honoured with `canExplode`).
+ */
+export type SpeechResult = string | { text: string; fallback?: boolean; explode?: boolean };
 
 /**
  * One answer an agent gave, in the order the GM asked. A save game is the deal
  * seed plus this journal: replaying it reproduces the game exactly.
  */
-export type Decision = { t: number | null } | { s: string; fb?: true };
+export type Decision = { t: number | null } | { s: string; fb?: true; x?: true };
 
 export interface Agent {
   speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<SpeechResult>;

@@ -18,7 +18,8 @@ export const RULES_TEXT = `【规则】12 人屠边局：4 狼人、4 村民、�
 - 女巫有金水（救人）、银水（毒药）各一瓶，同一晚可以都用；只知道谁死了、不知道死因；不能毒自己。
 - 猎人整局可以开一枪带走一名玩家（不能射自己），夜里轮到他时或出局时都可以开。
 - 夜里死亡的玩家没有遗言。白天由随机玩家开始顺/逆时针发言，首位发言人最后再做一次归纳总结，然后投票，票数最多者被放逐并留遗言。
-- 平票时平票者各做一次正名发言，全体在平票者中再投；再次平票由 GM 随机淘汰一人。`;
+- 平票时平票者各做一次正名发言，全体在平票者中再投；再次平票由 GM 随机淘汰一人。
+- 狼人可以在白天轮到自己发言时自爆：公开狼人身份并立即出局（没有遗言），当天剩余发言和投票全部取消，直接进入黑夜。`;
 
 const ROLE_GUIDE: Record<Role, string> = {
   werewolf:
@@ -142,9 +143,12 @@ ${req.round === 1
     ? `今天在你之前已有 ${prior.map(seat).join('、')} 发言（见上方【今天的发言】）。你必须具体回应其中至少两人：点名并引用或概括他们说过的内容，说明你同意/反对的理由；同时结合昨夜的死亡情况、身份声明（例如谁跳了预言家、报了什么查验）和之前的投票。不要说泛泛的「XX发言奇怪」而不给出依据。`
     : '你是今天第一个发言的人，其他人都还没轮到，不能拿「没发言」怀疑任何人。结合昨夜结果和之前几天的记录（如果有）开个头，给出你的初步判断，不要编造别人说过的话。';
   const progress = speechProgress(req, view);
+  const explode = req.canExplode
+    ? `\n【自爆选项】你是狼人，可以选择自爆：在发言最开头写「${EXPLODE_TAG}」，后面接你的最后一句话。自爆后你立刻出局，今天剩下的发言和投票全部取消，直接天黑。代价很大（白送一狼），只在局势对狼队明显不利时用：例如你被可信的预言家查杀、今天必然被放逐，自爆能打断好人归票、保住队友或让真预言家来不及报查验。局势正常就不要自爆。`
+    : '';
   return `现在是第 ${req.day} 天（第 ${req.day} 轮白天）。${aliveList(view)}
 ${progress ? `${progress}\n` : ''}${what}
-${respond}
+${respond}${explode}
 200 字以内，直接输出发言内容。`;
 }
 
@@ -253,6 +257,14 @@ export function parseTarget(text: string, req: TargetRequest): { target: number 
     if (valid.has(Number(n))) return { target: Number(n) - 1, reason };
   }
   return { target: undefined, reason };
+}
+
+export const EXPLODE_TAG = '【自爆】';
+
+/** Split a leading 【自爆】 marker off a day speech. */
+export function parseExplode(text: string): { text: string; explode: boolean } {
+  const m = text.match(/^\s*[【\[]\s*自爆\s*[】\]]\s*/);
+  return m ? { text: text.slice(m[0].length), explode: true } : { text, explode: false };
 }
 
 /** Trim quotes / "3号艾德：" prefixes a model sometimes adds to speeches. */

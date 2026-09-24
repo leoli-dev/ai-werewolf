@@ -67,6 +67,51 @@ describe('Game engine', () => {
     expect(wins.good + wins.wolf).toBe(300);
   });
 
+  it('a wolf self-destructing ends the day: rest of the speeches and the vote are skipped', async () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const g = new Game({ names, humanSeat: -1, seed, wolfChatRounds: 1 });
+      const speakers: number[] = [];
+      let exploder = -1;
+      let canExplodeSeen = false;
+      g.setAgents(
+        names.map((_, id): Agent => ({
+          speak: async (r) => {
+            if (r.kind !== 'speech') return 'pass';
+            if (r.canExplode) {
+              canExplodeSeen = true;
+              expect(g.players[id].role).toBe('werewolf');
+            }
+            if (r.purpose === 'discussion' && r.day === 1) speakers.push(id);
+            // the first wolf to speak on day 1 blows up; good players' explode flags are ignored
+            if (r.day === 1 && exploder < 0 && (r.canExplode || g.players[id].role !== 'werewolf')) {
+              if (r.canExplode) {
+                exploder = id;
+                return { text: '我自爆。', explode: true };
+              }
+              return { text: '我是好人。', explode: true };
+            }
+            return '过。';
+          },
+          choose: async (r) => r.candidates[0] ?? null,
+        })),
+      );
+      await g.run();
+      expect(canExplodeSeen).toBe(true);
+      expect(exploder).toBeGreaterThanOrEqual(0);
+      expect(g.players[exploder].alive).toBe(false);
+      // nobody spoke after the wolf, no summary, no vote on day 1
+      expect(speakers[speakers.length - 1]).toBe(exploder);
+      const day1 = g.events.filter((e) => e.day === 1);
+      expect(day1.some((e) => e.type === 'vote')).toBe(false);
+      expect(day1.some((e) => e.speechKind === 'summary' || e.speechKind === 'lastWords')).toBe(false);
+      expect(day1.filter((e) => e.type === 'death' && e.data?.cause === 'explode').map((e) => e.data!.id)).toEqual([exploder]);
+      // non-wolves' explode flag was ignored: exactly one explosion
+      expect(g.journal.filter((d) => 'x' in d).length).toBe(1);
+      // straight into the next night
+      if (g.state.day > 1) expect(g.events.find((e) => e.day === 2)?.phase).toBe('night');
+    }
+  });
+
   it('seer check info vanishes if the seer dies that night', async () => {
     // wolves always kill the seer; guard/witch never help
     for (let seed = 1; seed <= 20; seed++) {

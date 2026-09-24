@@ -9,6 +9,7 @@ import {
   type PlayerView,
   type Role,
   type SpeechRequest,
+  type SpeechResult,
   type TargetRequest,
   type WolfChatRequest,
 } from '../game/types';
@@ -647,7 +648,7 @@ export class GameUI {
       );
     switch (e.type) {
       case 'speech': {
-        const kind = { discussion: '', summary: '总结', lastWords: '遗言', defense: '正名' }[e.speechKind ?? 'discussion'];
+        const kind = e.data?.explode ? '自爆' : { discussion: '', summary: '总结', lastWords: '遗言', defense: '正名' }[e.speechKind ?? 'discussion'];
         const fb = e.data?.fallback ? h('span', { class: 'kind fallback', title: '模型调用失败，由规则 AI 代发' }, '规则AI代打') : null;
         el = said(e.speaker!, '', kind ? h('span', { class: 'kind' }, kind) : null, fb);
         el.append(h('div', { class: 'text' }, e.text));
@@ -711,7 +712,7 @@ export class GameUI {
     this.pendingTarget = null;
   }
 
-  private askSpeech(req: SpeechRequest | WolfChatRequest, _view: PlayerView): Promise<string> {
+  private askSpeech(req: SpeechRequest | WolfChatRequest, _view: PlayerView): Promise<SpeechResult> {
     return new Promise((resolve) => {
       const title =
         req.kind === 'wolfChat'
@@ -728,10 +729,24 @@ export class GameUI {
       const ta = h('textarea', { placeholder: req.kind === 'wolfChat' ? '例：今晚刀 5 号，他像预言家…' : '例：我是好人，3 号发言前后矛盾…', maxlength: '400' }) as HTMLTextAreaElement;
       const count = h('span', { class: 'count' }, '0 / 400');
       ta.oninput = () => (count.textContent = `${ta.value.length} / 400`);
-      const done = (text: string) => {
+      const done = (text: string, explode = false) => {
         this.close();
-        resolve(text);
+        resolve(explode ? { text, explode } : text);
       };
+      // two clicks: the first arms it, so a stray click can't throw the game away
+      let armed = false;
+      const explodeBtn =
+        req.kind === 'speech' && req.canExplode
+          ? (h('button', {
+              class: 'btn danger',
+              title: '公开狼人身份并立即出局（无遗言）；今天剩余发言和投票取消，直接天黑。输入框里的话会作为你的最后发言。',
+              onclick: () => {
+                if (armed) return done(ta.value.trim() || '过', true);
+                armed = true;
+                explodeBtn!.textContent = '确认自爆？';
+              },
+            }, '自爆') as HTMLButtonElement)
+          : null;
       ta.onkeydown = (e) => {
         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && ta.value.trim()) done(ta.value.trim());
       };
@@ -749,6 +764,7 @@ export class GameUI {
                 h('button', { class: 'btn primary', onclick: () => done('pass') }, '没有补充，开始投票'),
               ]
             : [
+                explodeBtn,
                 h('button', { class: 'btn', onclick: () => done(req.kind === 'wolfChat' ? 'pass' : '过。') }, '过'),
                 h('button', { class: 'btn primary', onclick: () => ta.value.trim() && done(ta.value.trim()) }, '发言 (⌘↵)'),
               ]),
