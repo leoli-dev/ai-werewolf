@@ -1,6 +1,11 @@
 import { Rng } from '../game/rng';
 import { ROLE_NAME, seat, type Agent, type Role, type PlayerView, type SpeechRequest, type TargetRequest, type WolfChatRequest } from '../game/types';
 
+export interface MockSnapshot {
+  rng: number;
+  suspicion: [number, number][];
+}
+
 /**
  * Offline rule-based agent: no LLM needed. Used for tests and the
  * "离线规则 AI" mode. Plays plausibly but simply.
@@ -11,6 +16,16 @@ export class MockAgent implements Agent {
 
   constructor(seed?: number, private delayMs = 0) {
     this.rng = new Rng(seed);
+  }
+
+  /** Save-game state (the replay never calls agents, so their memory is saved as is). */
+  snapshot(): MockSnapshot {
+    return { rng: this.rng.state, suspicion: [...this.suspicion] };
+  }
+
+  restore(s: MockSnapshot) {
+    this.rng = new Rng(s.rng);
+    this.suspicion = new Map(s.suspicion);
   }
 
   private async wait() {

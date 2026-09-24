@@ -5,8 +5,10 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
  * Dev-only LLM proxy. Local inference servers (e.g. MTPLX) refuse browser
  * cross-origin requests, so the browser calls `/__llm/<path>` on the Vite
  * server and the request is forwarded server-side to `<LLM_BASE_URL>/<path>`
- * (or to the `x-llm-base` header, when the player overrides it in the setup
- * screen). `LLM_API_KEY` from `.env` is added here, so it never reaches the browser.
+ * (or to the `x-llm-base` header: the provider picked in 配置). A key sent by
+ * the browser (from its encrypted vault) is passed through; otherwise
+ * `LLM_API_KEY` from `.env` is added — only for the `.env` server itself, so it
+ * never reaches the browser or any other host.
  */
 function llmProxy(env: Record<string, string>): Plugin {
   return {
@@ -22,8 +24,9 @@ function llmProxy(env: Record<string, string>): Plugin {
         const chunks: Buffer[] = [];
         for await (const c of req) chunks.push(c as Buffer);
         const headers: Record<string, string> = { 'content-type': 'application/json' };
+        const envBase = (env.LLM_BASE_URL ?? '').replace(/\/+$/, '');
         if (req.headers.authorization) headers.authorization = String(req.headers.authorization);
-        else if (env.LLM_API_KEY) headers.authorization = `Bearer ${env.LLM_API_KEY}`;
+        else if (env.LLM_API_KEY && base === envBase) headers.authorization = `Bearer ${env.LLM_API_KEY}`;
         try {
           const upstream = await fetch(base + (req.url ?? ''), {
             method: req.method,

@@ -1,4 +1,5 @@
-import type { ProviderConfig, ReasoningLevel } from './ai/provider';
+import { LOCAL_EFFORTS } from './ai/catalog';
+import type { ProviderConfig } from './ai/provider';
 
 /**
  * LLM connection settings come from `.env` (see `.env.example`), for both the
@@ -28,18 +29,18 @@ export interface EnvProvider {
   missing: string[];
 }
 
-const LEVELS: ReasoningLevel[] = ['none', 'low', 'medium', 'high'];
-
-function level(v: string | undefined, fallback: ReasoningLevel): ReasoningLevel {
-  const s = (v ?? '').trim().toLowerCase() as ReasoningLevel;
-  return LEVELS.includes(s) ? s : fallback;
+function level(v: string | undefined, fallback: string): string {
+  const s = (v ?? '').trim().toLowerCase();
+  return LOCAL_EFFORTS.includes(s) ? s : fallback;
 }
 
 export function providerFromEnv(env: LlmEnv): EnvProvider {
   const missing = (['LLM_BASE_URL', 'LLM_MODEL'] as const).filter((k) => !env[k]?.trim());
   const timeout = Number(env.LLM_TIMEOUT_MS);
   return {
+    // `.env` describes the local server (the official APIs are presets, see catalog.ts)
     config: {
+      provider: 'local',
       baseUrl: (env.LLM_BASE_URL ?? '').trim().replace(/\/+$/, ''),
       apiKey: (env.LLM_API_KEY ?? '').trim(),
       model: (env.LLM_MODEL ?? '').trim(),

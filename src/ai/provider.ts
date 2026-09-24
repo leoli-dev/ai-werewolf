@@ -1,14 +1,17 @@
 /** OpenAI-compatible chat completion adapter. */
-
-export type ReasoningLevel = 'none' | 'low' | 'medium' | 'high';
+import { PROVIDERS, buildChatBody, clampEffort, effortsFor, type ProviderId } from './catalog';
 
 export interface ProviderConfig {
+  /** Which entry of the provider matrix (decides the request dialect). */
+  provider: ProviderId;
   baseUrl: string;
-  apiKey: string;
+  /** Plain key, for node tools only; the browser reads keys from the vault via `keySource`. */
+  apiKey?: string;
   model: string;
-  reasoning: ReasoningLevel;
+  /** Official reasoning value for speeches ('' = model has no reasoning control). */
+  reasoning: string;
   /** Reasoning for votes, night skills and wolf chat (short, frequent calls). */
-  decisionReasoning: ReasoningLevel;
+  decisionReasoning: string;
   /** Route through the Vite dev server (`/__llm`) to avoid CORS on local servers. */
   useProxy: boolean;
   timeoutMs: number;
@@ -36,12 +39,38 @@ export class ProviderError extends Error {
   }
 }
 
-export class OpenAICompatibleProvider {
-  constructor(public config: ProviderConfig) {}
+/** Supplies the API key for a provider at request time (null = none / locked). */
+export type KeySource = (provider: ProviderId) => Promise<string | null>;
 
-  private url(path: string): { url: string; headers: Record<string, string> } {
+/** A key only ever goes to its own provider's official address (the local server: anywhere). */
+export function keyMayGoTo(provider: ProviderId, baseUrl: string): boolean {
+  const preset = PROVIDERS[provider];
+  if (preset.editableUrl) return true;
+  try {
+    return new URL(baseUrl).origin === new URL(preset.baseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+export class OpenAICompatibleProvider {
+  constructor(public config: ProviderConfig, private keySource?: KeySource) {}
+
+  private async key(): Promise<string | null> {
+    const { provider, baseUrl } = this.config;
+    const key = this.keySource ? await this.keySource(provider) : this.config.apiKey || null;
+    if (!key) {
+      if (PROVIDERS[provider].needsKey) throw new ProviderError(`未设置 ${PROVIDERS[provider].label} 的 API Key，或密钥库未解锁（配置 → AI 引擎）`, 401);
+      return null;
+    }
+    if (!keyMayGoTo(provider, baseUrl)) throw new ProviderError(`拒绝把 ${PROVIDERS[provider].label} 的 Key 发往非官方地址 ${baseUrl}`, 400);
+    return key;
+  }
+
+  private async url(path: string): Promise<{ url: string; headers: Record<string, string> }> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
+    const key = await this.key();
+    if (key) headers.Authorization = `Bearer ${key}`;
     const base = this.config.baseUrl.replace(/\/+$/, '');
     if (this.config.useProxy) {
       headers['x-llm-base'] = base;
@@ -51,7 +80,7 @@ export class OpenAICompatibleProvider {
   }
 
   private async request(path: string, init: { method: string; body?: unknown }, timeoutMs = this.config.timeoutMs) {
-    const { url, headers } = this.url(path);
+    const { url, headers } = await this.url(path);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
@@ -84,18 +113,19 @@ export class OpenAICompatibleProvider {
     return (json?.data ?? []).map((m: { id: string }) => m.id);
   }
 
-  async chat(messages: ChatMessage[], opts: { maxTokens?: number; temperature?: number; reasoning?: ReasoningLevel } = {}): Promise<ChatResult> {
-    const body: Record<string, unknown> = {
-      model: this.config.model,
+  async chat(messages: ChatMessage[], opts: { maxTokens?: number; temperature?: number; reasoning?: string } = {}): Promise<ChatResult> {
+    const { provider, model } = this.config;
+    // never send a value the model does not accept (e.g. after switching models)
+    const efforts = effortsFor(provider, model);
+    const want = opts.reasoning ?? this.config.reasoning;
+    const body = buildChatBody({
+      dialect: PROVIDERS[provider].dialect,
+      model,
       messages,
-      max_tokens: opts.maxTokens ?? 1500,
+      maxTokens: opts.maxTokens ?? 1500,
       temperature: opts.temperature ?? 0.9,
-      stream: false,
-    };
-    const reasoning = opts.reasoning ?? this.config.reasoning;
-    if (reasoning !== 'none') body.reasoning_effort = reasoning;
-    // Qwen-style servers: ask the chat template to skip thinking entirely (ignored elsewhere)
-    else body.chat_template_kwargs = { enable_thinking: false };
+      effort: clampEffort(want, efforts),
+    });
     const t0 = performance.now();
     const json = await this.request('/chat/completions', { method: 'POST', body });
     const msg = json?.choices?.[0]?.message ?? {};

@@ -133,6 +133,12 @@ export interface PlayerView {
 /** `fallback` marks text produced by the rule AI instead of the model. */
 export type SpeechResult = string | { text: string; fallback?: boolean };
 
+/**
+ * One answer an agent gave, in the order the GM asked. A save game is the deal
+ * seed plus this journal: replaying it reproduces the game exactly.
+ */
+export type Decision = { t: number | null } | { s: string; fb?: true };
+
 export interface Agent {
   speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<SpeechResult>;
   choose(req: TargetRequest, view: PlayerView): Promise<number | null>;

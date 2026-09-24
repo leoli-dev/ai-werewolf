@@ -6,6 +6,7 @@ import {
   seat,
   type Agent,
   type DeathCause,
+  type Decision,
   type DecisionRequest,
   type EventType,
   type GameEvent,
@@ -32,6 +33,11 @@ export interface GameOptions {
   wolfChatRounds?: number;
   /** Pause between GM steps, ms (0 in tests). */
   paceMs?: number;
+  /**
+   * Resume a saved game: these recorded answers are fed back instantly (no agent
+   * calls, no pacing, no scene cues) before live play continues. Needs the same `seed`.
+   */
+  replay?: Decision[];
 }
 
 export interface GameState {
@@ -61,23 +67,39 @@ export interface GameHooks {
   onState?(s: GameState): void;
   /** Resolve when the scene has played the cue (e.g. every wolf is back indoors). */
   cue?(c: SceneCue): Promise<void>;
+  /** Resumed game only: the replay has caught up, live play starts now. */
+  restored?(): void;
 }
 
 export class GameAborted extends Error {}
+/** A save's journal no longer fits the engine (e.g. saved by an older version). */
+export class ReplayMismatch extends Error {}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Game {
   readonly rng: Rng;
+  /** Deal/flow seed; with `journal` it is everything needed to rebuild the game. */
+  readonly seed: number;
   readonly state: GameState;
   readonly events: GameEvent[] = [];
+  /** Every answer given so far (replayed ones included). */
+  readonly journal: Decision[] = [];
   private agents: Agent[] = [];
   private aborted = false;
+  private paused = false;
+  private pauseWaiters: (() => void)[] = [];
+  private readonly replay: Decision[];
+  private cursor = 0;
+  private restoring: boolean;
   private readonly wolfChatRounds: number;
-  private readonly paceMs: number;
+  private paceMs: number;
 
   constructor(private opts: GameOptions, private hooks: GameHooks = {}) {
-    this.rng = new Rng(opts.seed);
+    this.seed = opts.seed ?? (Math.random() * 2 ** 32) >>> 0;
+    this.rng = new Rng(this.seed);
+    this.replay = opts.replay ?? [];
+    this.restoring = opts.replay !== undefined;
     this.wolfChatRounds = opts.wolfChatRounds ?? 3;
     this.paceMs = opts.paceMs ?? 0;
     const roles = this.dealRoles();
@@ -120,6 +142,52 @@ export class Game {
 
   abort() {
     this.aborted = true;
+    this.release();
+  }
+
+  /** 配置 changed the pace mid-game. */
+  setPace(ms: number) {
+    this.paceMs = ms;
+  }
+
+  /** Freeze the GM: it stops at its next step (an answer arriving meanwhile waits too). */
+  pause() {
+    this.paused = true;
+  }
+
+  resume() {
+    this.paused = false;
+    this.release();
+  }
+
+  get isPaused() {
+    return this.paused;
+  }
+
+  /** Still fast-forwarding through a save's journal. */
+  get replaying() {
+    return this.cursor < this.replay.length;
+  }
+
+  private release() {
+    const waiters = this.pauseWaiters;
+    this.pauseWaiters = [];
+    for (const r of waiters) r();
+  }
+
+  private async gate() {
+    this.guard();
+    while (this.paused) {
+      await new Promise<void>((r) => this.pauseWaiters.push(r));
+      this.guard();
+    }
+  }
+
+  /** Tell the host once the replay has caught up (at the first live step: pace, cue or question). */
+  private checkRestored() {
+    if (!this.restoring || this.replaying) return;
+    this.restoring = false;
+    this.hooks.restored?.();
   }
 
   // ───────────────────────── queries ─────────────────────────
@@ -225,45 +293,70 @@ export class Game {
   }
 
   private async pace(mult = 1) {
-    this.guard();
+    await this.gate();
+    if (this.replaying) return;
+    this.checkRestored();
     if (this.paceMs > 0) await sleep(this.paceMs * mult);
-    this.guard();
+    await this.gate();
   }
 
   private async cue(c: SceneCue) {
-    this.guard();
+    await this.gate();
+    if (this.replaying) return;
+    this.checkRestored();
     if (this.hooks.cue) await this.hooks.cue(c);
-    this.guard();
+    await this.gate();
   }
 
   private guard() {
     if (this.aborted) throw new GameAborted();
   }
 
+  /** The agent's answer, or the recorded one while replaying a save. Journaled either way. */
+  private async answer(id: number, req: DecisionRequest): Promise<Decision> {
+    if (this.replaying) {
+      const rec = this.replay[this.cursor++];
+      if ((req.kind === 'target') !== 't' in rec) throw new ReplayMismatch(`存档第 ${this.cursor} 步与当前规则不符`);
+      this.journal.push(rec);
+      return rec;
+    }
+    this.checkRestored();
+    await this.gate();
+    const agent = this.agents[id];
+    const view = this.viewFor(id);
+    let rec: Decision;
+    if (req.kind === 'target') rec = { t: await agent.choose(req, view) };
+    else {
+      const res = await agent.speak(req, view);
+      rec = typeof res === 'string' ? { s: res } : res.fallback ? { s: res.text, fb: true } : { s: res.text };
+    }
+    this.guard();
+    // journal before waiting out a pause, so a save made meanwhile keeps this answer
+    this.journal.push(rec);
+    await this.gate();
+    return rec;
+  }
+
   private async ask(id: number, req: DecisionRequest, label: string): Promise<string | number | null> {
     this.guard();
     this.setActor(id, label);
-    const agent = this.agents[id];
-    const view = this.viewFor(id);
     try {
-      if (req.kind === 'target') {
-        const choice = await agent.choose(req, view);
-        this.guard();
+      const rec = await this.answer(id, req);
+      if ('t' in rec) {
+        const choice = rec.t;
+        const { candidates, allowSkip } = req as TargetRequest;
         if (choice === null) {
-          if (req.allowSkip) return null;
-          return this.rng.pick(req.candidates);
+          if (allowSkip) return null;
+          return this.rng.pick(candidates);
         }
-        if (!req.candidates.includes(choice)) {
+        if (!candidates.includes(choice)) {
           this.emit('system', `${seat(id)}给出非法目标 ${choice + 1}，已随机替换`, { kind: 'private', to: [id] });
-          return req.allowSkip ? null : this.rng.pick(req.candidates);
+          return allowSkip ? null : this.rng.pick(candidates);
         }
         return choice;
       }
-      const res = await agent.speak(req, view);
-      this.guard();
-      const text = typeof res === 'string' ? res : res.text;
-      this.lastSpeechFallback = typeof res !== 'string' && !!res.fallback;
-      return text.trim() || '（沉默）';
+      this.lastSpeechFallback = !!rec.fb;
+      return rec.s.trim() || '（沉默）';
     } finally {
       this.setActor(null);
     }
@@ -312,6 +405,7 @@ export class Game {
       await this.dayPhase();
       if (this.endIfWon()) break;
     }
+    this.checkRestored();
     return this.state.winner;
   }
 

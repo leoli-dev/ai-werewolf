@@ -15,6 +15,7 @@ import {
 import { characterCanvas, type Look } from '../render/pixel';
 import type { ScreenPos, Stage } from '../render/stage';
 import { audio } from '../audio/audio';
+import { getConfig, onConfigChange, updateConfig } from '../settings';
 import { h } from './dom';
 import { showRules } from './rules';
 
@@ -77,6 +78,14 @@ const NIGHT_STEP_NAME: Record<NightStep, string> = {
   witch: '女巫轮',
 };
 
+export interface GameUIOptions {
+  /** Resuming a save: the replay rebuilds the log silently, then `restored()` sets the scene. */
+  restoring: boolean;
+  /** Game time already played (resumed games). */
+  elapsedMs: number;
+  onPause: () => void;
+}
+
 export class GameUI {
   private hud!: HTMLElement;
   private roleCard!: HTMLElement;
@@ -97,6 +106,10 @@ export class GameUI {
   private stepEl!: HTMLElement;
   private lastStep: NightStep | null = null;
   private clockTimer = 0;
+  /** Played time before `runningSince` (the clock stops while paused). */
+  private playedMs = 0;
+  private runningSince: number | null = null;
+  private restoring: boolean;
   private actorKey = '';
   private actorSince = 0;
   private actorTimer = 0;
@@ -113,7 +126,10 @@ export class GameUI {
     private godView: boolean,
     private onRestart: () => void,
     private looks: Look[],
+    private opts: GameUIOptions,
   ) {
+    this.restoring = opts.restoring;
+    this.playedMs = opts.elapsedMs;
     this.build();
     this.agent = {
       speak: (req, view) => this.askSpeech(req, view),
@@ -177,14 +193,9 @@ export class GameUI {
 
     this.clock = h('div', { class: 'clock', title: '本局已进行时间' }, '00:00');
     this.banner = h('div', { id: 'banner', class: 'panel' }, this.clock, h('div', { class: 'phase' }, '准备中'), h('div', { class: 'actor' }));
-    const started = performance.now();
-    this.clockTimer = window.setInterval(() => {
-      const sec = Math.floor((performance.now() - started) / 1000);
-      const hh = Math.floor(sec / 3600);
-      const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
-      const ss = String(sec % 60).padStart(2, '0');
-      this.clock.textContent = hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
-    }, 1000);
+    this.runningSince = performance.now();
+    this.clockTimer = window.setInterval(() => this.renderClock(), 1000);
+    this.renderClock();
 
     const topright = h(
       'div',
@@ -192,7 +203,7 @@ export class GameUI {
       this.engineChip,
       this.muteBtn(),
       h('button', { class: 'btn', onclick: () => showRules(this.root) }, '规则说明'),
-      h('button', { class: 'btn danger', onclick: () => confirm('放弃本局并返回设置？') && this.onRestart() }, '重新开局'),
+      h('button', { class: 'btn', title: '暂停（Esc）', onclick: () => this.opts.onPause() }, '暂停'),
     );
 
     this.chatTabs = h('div', { class: 'tabs', role: 'tablist' });
@@ -214,27 +225,33 @@ export class GameUI {
     this.renderRoster();
   }
 
-  private muteBtn() {
-    let muted = false;
-    try {
-      muted = localStorage.getItem('ai-werewolf:muted') === '1';
-    } catch {
-      /* ignore */
+  /** Game time played so far, excluding pauses. */
+  get elapsedMs() {
+    return this.playedMs + (this.runningSince === null ? 0 : performance.now() - this.runningSince);
+  }
+
+  setPaused(paused: boolean) {
+    if (paused && this.runningSince !== null) {
+      this.playedMs = this.elapsedMs;
+      this.runningSince = null;
+    } else if (!paused && this.runningSince === null && this.game.state.phase !== 'ended') {
+      this.runningSince = performance.now();
     }
-    audio.setMuted(muted);
-    const b = h('button', { class: 'btn', title: '声音开关' }, muted ? '♪ 关' : '♪ 开');
-    b.onclick = () => {
-      muted = !muted;
-      audio.setMuted(muted);
-      b.textContent = muted ? '♪ 关' : '♪ 开';
-      try {
-        localStorage.setItem('ai-werewolf:muted', muted ? '1' : '0');
-      } catch {
-        /* ignore */
-      }
-    };
+  }
+
+  private renderClock() {
+    this.clock.textContent = formatClock(this.elapsedMs);
+  }
+
+  /** Quick mute; the same switch as 配置 → 声音. */
+  private muteBtn() {
+    const label = () => (getConfig().audio.muted ? '♪ 关' : '♪ 开');
+    const b = h('button', { class: 'btn', title: '声音开关' }, label());
+    b.onclick = () => updateConfig({ audio: { muted: !getConfig().audio.muted } });
+    this.unsubConfig = onConfigChange(() => (b.textContent = label()));
     return b;
   }
+  private unsubConfig = () => {};
 
   setEngineMode(mode: 'llm' | 'offline') {
     this.engineMode = mode;
@@ -305,6 +322,7 @@ export class GameUI {
   }
 
   destroy() {
+    this.unsubConfig();
     clearInterval(this.actorTimer);
     clearInterval(this.clockTimer);
     for (const el of [...this.root.children]) el.remove();
@@ -316,6 +334,11 @@ export class GameUI {
   // ───────────────────────── game hooks ─────────────────────────
 
   onEvent(e: GameEvent) {
+    if (this.restoring) {
+      // replaying a save: only keep the bubbles current; restored() rebuilds the rest at once
+      if (this.canSee(e)) this.trackBubble(e);
+      return;
+    }
     if (e.type === 'death') {
       const id = e.data!.id as number;
       // exiles walk home after their last words; everyone else leaves a grave now
@@ -329,16 +352,50 @@ export class GameUI {
       setTimeout(() => (peaceful ? audio.peaceful() : audio.death()), 2600);
     }
     if (!this.canSee(e)) return;
+    this.trackBubble(e);
+    if (this.matches(e)) this.appendMsg(e);
+    if (e.type === 'private' || e.type === 'gm' || e.type === 'death') this.renderRoster();
+  }
+
+  private trackBubble(e: GameEvent) {
     if ((e.type === 'speech' || e.type === 'wolfChat') && e.speaker !== undefined) {
       // every speaker keeps their latest words over their head (day: until everyone
       // goes home at nightfall; wolf chat: until the pack is back indoors)
       this.bubbles.set(e.speaker, { text: e.text, seq: ++this.bubbleSeq });
     }
-    if (this.matches(e)) this.appendMsg(e);
-    if (e.type === 'private' || e.type === 'gm' || e.type === 'death') this.renderRoster();
+  }
+
+  /**
+   * The replay of a save has caught up: put the scene where the game stands
+   * (graves, sealed houses, who is indoors, wolves out) without animation or sound.
+   */
+  restored() {
+    this.restoring = false;
+    const s = this.game.state;
+    const night = s.phase === 'night';
+    const dead: number[] = [];
+    const exiled: number[] = [];
+    for (const e of this.game.events) {
+      if (e.type !== 'death') continue;
+      const id = e.data!.id as number;
+      // today's exile still stands on the plaza for the vote result / last words
+      if (e.data!.cause !== 'vote') dead.push(id);
+      else if (e.day === s.day && (s.phase === 'vote' || s.phase === 'lastWords')) this.pendingExile.add(id);
+      else exiled.push(id);
+    }
+    const iSeeWolves = this.game.players[this.me].role === 'werewolf' || this.godView;
+    this.wolvesShown = night && s.nightStep === 'wolves' && iSeeWolves ? this.game.wolves().filter((w) => w.alive).map((w) => w.id) : [];
+    this.lastHowlStep = `${s.day}:${s.nightStep}`;
+    this.stage.restore({ dead, exiled, indoors: night, wolves: this.wolvesShown, night });
+    this.onState(s);
+    this.renderTabs();
   }
 
   onState(s: GameState) {
+    if (this.restoring) {
+      this.scopeBubbles(s);
+      return;
+    }
     const night = s.phase === 'night';
     this.stage.setNight(night);
     audio.setNight(night);
@@ -371,7 +428,7 @@ export class GameUI {
       clearInterval(this.actorTimer);
       if (!actorKey) actorEl.textContent = '';
       else {
-        this.actorSince = performance.now();
+        this.actorSince = this.elapsedMs;
         const timer = h('span', { class: 'timer' });
         actorEl.replaceChildren(
           secret && !mine ? '夜幕下' : `${seat(s.actor!)} ${this.game.players[s.actor!].name} · ${s.actorLabel}`,
@@ -379,7 +436,7 @@ export class GameUI {
           mine ? '' : timer,
         );
         this.actorTimer = window.setInterval(() => {
-          const sec = Math.floor((performance.now() - this.actorSince) / 1000);
+          const sec = Math.floor((this.elapsedMs - this.actorSince) / 1000);
           timer.textContent = sec >= 3 ? ` ${sec}s` : '';
         }, 500);
       }
@@ -403,7 +460,9 @@ export class GameUI {
     this.renderRoster();
     this.renderItems();
     if (s.phase === 'ended') {
+      this.setPaused(true);
       clearInterval(this.clockTimer);
+      this.renderClock();
       this.showEnd(s);
     }
   }
@@ -417,13 +476,7 @@ export class GameUI {
 
   /** Map engine state changes onto scene animation (howls, exiles). */
   private choreograph(s: GameState) {
-    // night ↔ day: wipe leftover bubbles from the previous part of the round
-    // (the wolf-chat bubbles are their own scope, gone once the wolf turn ends)
-    const bubbleScope = `${s.day}:${s.phase === 'night' ? `night:${s.nightStep === 'wolves' ? 'wolves' : ''}` : 'day'}`;
-    if (bubbleScope !== this.bubbleScope) {
-      this.bubbleScope = bubbleScope;
-      this.bubbles.clear();
-    }
+    this.scopeBubbles(s);
     const stepKey = `${s.day}:${s.nightStep}`;
     if (s.nightStep === 'wolves' && this.lastHowlStep !== stepKey) {
       this.lastHowlStep = stepKey;
@@ -433,6 +486,16 @@ export class GameUI {
     if (this.pendingExile.size && s.phase !== 'vote' && s.phase !== 'lastWords') {
       for (const id of this.pendingExile) this.stage.exiled(id);
       this.pendingExile.clear();
+    }
+  }
+
+  /** night ↔ day: wipe leftover bubbles from the previous part of the round
+   * (the wolf-chat bubbles are their own scope, gone once the wolf turn ends). */
+  private scopeBubbles(s: GameState) {
+    const bubbleScope = `${s.day}:${s.phase === 'night' ? `night:${s.nightStep === 'wolves' ? 'wolves' : ''}` : 'day'}`;
+    if (bubbleScope !== this.bubbleScope) {
+      this.bubbleScope = bubbleScope;
+      this.bubbles.clear();
     }
   }
 
@@ -743,7 +806,7 @@ export class GameUI {
           h('div', { class: `winner ${s.winner}` }, s.winner === 'good' ? '好人胜利' : '狼人胜利'),
           h('p', { style: 'text-align:center' }, won ? '你所在的阵营赢得了这座小镇。' : '你所在的阵营输掉了这一局。'),
           h('div', { class: 'reveal' }, ...this.game.players.map((p) => h('div', { class: teamOf(p.role) === 'wolf' ? 'wolf' : '' }, `${seat(p.id)} ${p.name}`, h('br'), `${ROLE_NAME[p.role]}${p.alive ? '' : ' ✝'}`))),
-          h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => back.remove() }, '回看记录'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '再来一局')),
+          h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => back.remove() }, '回看记录'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
         ),
       );
       this.root.appendChild(back);
@@ -751,4 +814,12 @@ export class GameUI {
       this.renderChat();
     }, 1500);
   }
+}
+
+export function formatClock(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  const hh = Math.floor(sec / 3600);
+  const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+  const ss = String(sec % 60).padStart(2, '0');
+  return hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
 }

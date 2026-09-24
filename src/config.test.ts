@@ -14,7 +14,7 @@ describe('providerFromEnv', () => {
       LLM_TIMEOUT_MS: '5000',
       LLM_HAS_KEY: '1',
     });
-    expect(config).toEqual({ baseUrl: 'http://host:9000/v1', apiKey: 'sk-x', model: 'm', reasoning: 'high', decisionReasoning: 'none', useProxy: false, timeoutMs: 5000 });
+    expect(config).toEqual({ provider: 'local', baseUrl: 'http://host:9000/v1', apiKey: 'sk-x', model: 'm', reasoning: 'high', decisionReasoning: 'none', useProxy: false, timeoutMs: 5000 });
     expect(missing).toEqual([]);
     expect(keyOnServer).toBe(true);
   });

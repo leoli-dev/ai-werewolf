@@ -1,8 +1,8 @@
 import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, WolfChatRequest } from '../game/types';
 import { seat } from '../game/types';
-import { MockAgent } from './mockAgent';
+import { MockAgent, type MockSnapshot } from './mockAgent';
 import { cleanSpeech, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
-import { ProviderError, type ReasoningLevel, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
+import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
 
 export interface AgentTelemetry {
   onCall?(info: { player: number; kind: string; ms: number; ok: boolean; error?: string }): void;
@@ -12,6 +12,11 @@ export interface AgentTelemetry {
    * hook the agent falls back immediately (headless / tests).
    */
   onFailure?(info: { player: number; kind: string; error: string }): Promise<'retry' | 'fallback'>;
+}
+
+export interface LLMSnapshot {
+  notes: string[];
+  fallback: MockSnapshot;
 }
 
 /**
@@ -34,6 +39,15 @@ export class LLMAgent implements Agent {
     this.fallback = new MockAgent(id * 7919);
   }
 
+  snapshot(): LLMSnapshot {
+    return { notes: this.notes.slice(), fallback: this.fallback.snapshot() };
+  }
+
+  restore(s: LLMSnapshot) {
+    this.notes.splice(0, this.notes.length, ...s.notes);
+    this.fallback.restore(s.fallback);
+  }
+
   private messages(view: PlayerView, task: string): ChatMessage[] {
     return [
       { role: 'system', content: systemPrompt(view, this.persona) },
@@ -49,7 +63,7 @@ export class LLMAgent implements Agent {
     ];
   }
 
-  private async call(kind: string, msgs: ChatMessage[], maxTokens: number, reasoning?: ReasoningLevel): Promise<string> {
+  private async call(kind: string, msgs: ChatMessage[], maxTokens: number, reasoning?: string): Promise<string> {
     let lastErr = '';
     // back off on overload (e.g. local server 507 OOM under memory pressure)
     const delays = [0, 5000, 15000];

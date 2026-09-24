@@ -1,171 +1,66 @@
-import { OpenAICompatibleProvider, type ProviderConfig, type ReasoningLevel } from '../ai/provider';
-import { envProvider } from '../config';
 import { ROLE_NAME, type Role } from '../game/types';
+import { PROVIDERS } from '../ai/catalog';
+import { getConfig, loadGamePrefs, resolveProvider, saveGamePrefs, type Settings } from '../settings';
+import { showConfig } from './config';
 import { h } from './dom';
 
-export interface Settings {
-  provider: ProviderConfig;
-  mode: 'llm' | 'offline';
-  playerName: string;
-  role: Role | 'random';
-  paceMs: number;
-  wolfChatRounds: number;
-  godView: boolean;
-}
-
-const KEY = 'ai-werewolf:settings:v1';
-
-/** Game preferences persist in the browser; the LLM connection always comes from `.env`. */
-type Prefs = Omit<Settings, 'provider'>;
-
-const DEFAULT_PREFS: Prefs = {
-  mode: 'llm',
-  playerName: '旅人',
-  role: 'random',
-  paceMs: 900,
-  wolfChatRounds: 3,
-  godView: false,
-};
-
-export function loadSettings(): Settings {
-  let prefs = DEFAULT_PREFS;
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const { provider: _ignored, ...saved } = JSON.parse(raw);
-      prefs = { ...DEFAULT_PREFS, ...saved };
-    }
-  } catch {
-    /* ignore */
-  }
-  return { ...prefs, provider: envProvider().config };
-}
-
-function saveSettings(s: Settings) {
-  const { provider: _ignored, ...prefs } = s;
-  try {
-    localStorage.setItem(KEY, JSON.stringify(prefs));
-  } catch {
-    /* ignore */
-  }
-}
-
-/** Pre-game configuration screen. Resolves with the chosen settings. */
-export function showSetup(root: HTMLElement, onRules: () => void): Promise<Settings> {
-  const s = loadSettings();
+/**
+ * New-game screen: the choices for this game only (sound, pace and the AI
+ * engine live in 配置). Resolves with the settings, or null for 返回标题.
+ */
+export function showSetup(root: HTMLElement, onRules: () => void): Promise<Settings | null> {
+  const s = loadGamePrefs();
   return new Promise((resolve) => {
     const input = (value: string, type = 'text') => h('input', { type, value }) as HTMLInputElement;
-    const url = input(s.provider.baseUrl);
-    const key = input(s.provider.apiKey, 'password');
-    const env = envProvider();
-    key.placeholder = env.keyOnServer ? '已在 .env 配置（由开发服务器注入，不下发浏览器）' : '.env 未配置 LLM_API_KEY；本地服务可留空';
-    const model = input(s.provider.model);
-    model.setAttribute('list', 'model-list');
-    const modelList = h('datalist', { id: 'model-list' });
-    const levels = ['none', 'low', 'medium', 'high'] as ReasoningLevel[];
-    const reasoning = h('select', {}, ...levels.map((r) => h('option', { value: r, selected: r === s.provider.reasoning }, r))) as HTMLSelectElement;
-    const decisionReasoning = h('select', {}, ...levels.map((r) => h('option', { value: r, selected: r === s.provider.decisionReasoning }, r))) as HTMLSelectElement;
-    const proxy = h('input', { type: 'checkbox', checked: s.provider.useProxy }) as HTMLInputElement;
-    const mode = h('select', {}, h('option', { value: 'llm', selected: s.mode === 'llm' }, 'LLM 驱动（OpenAI 兼容接口）'), h('option', { value: 'offline', selected: s.mode === 'offline' }, '离线规则 AI（无需模型，调试用）')) as HTMLSelectElement;
     const name = input(s.playerName);
     const role = h('select', {}, h('option', { value: 'random' }, '随机（标准玩法）'), ...(Object.keys(ROLE_NAME) as Role[]).map((r) => h('option', { value: r, selected: s.role === r }, `${ROLE_NAME[r]}（调试）`))) as HTMLSelectElement;
-    const pace = h('select', {}, ...[
-      [300, '快'], [900, '标准'], [1800, '慢'],
-    ].map(([v, l]) => h('option', { value: String(v), selected: s.paceMs === v }, String(l)))) as HTMLSelectElement;
     const wolfRounds = input(String(s.wolfChatRounds), 'number');
     wolfRounds.min = '1';
     wolfRounds.max = '5';
     const god = h('input', { type: 'checkbox', checked: s.godView }) as HTMLInputElement;
-    const result = h('div', { class: 'test-result' });
 
-    const read = (): Settings => ({
-      provider: {
-        ...s.provider,
-        baseUrl: url.value.trim(),
-        apiKey: key.value.trim(),
-        model: model.value.trim(),
-        reasoning: reasoning.value as ReasoningLevel,
-        decisionReasoning: decisionReasoning.value as ReasoningLevel,
-        useProxy: proxy.checked,
-      },
-      mode: mode.value as Settings['mode'],
-      playerName: name.value.trim() || '旅人',
-      role: role.value as Settings['role'],
-      paceMs: Number(pace.value),
-      wolfChatRounds: Math.max(1, Math.min(5, Number(wolfRounds.value) || 3)),
-      godView: god.checked,
-    });
-
-    const testBtn = h('button', { class: 'btn', type: 'button' }, '测试连接') as HTMLButtonElement;
-    testBtn.onclick = async () => {
-      testBtn.disabled = true;
-      result.className = 'test-result';
-      result.textContent = '连接中…（本地推理首个请求可能较慢）';
-      let switched = '';
-      // if the server serves exactly one model and it isn't the one typed in, switch to it first
-      try {
-        const served = await new OpenAICompatibleProvider(read().provider).listModels();
-        if (served.length === 1 && !served.includes(model.value.trim())) {
-          switched = `.env 里的模型「${model.value.trim()}」服务端没有，本次临时改用「${served[0]}」，请更新 LLM_MODEL。`;
-          model.value = served[0];
-        }
-      } catch {
-        /* test() below reports connection problems */
-      }
-      const r = await new OpenAICompatibleProvider(read().provider).test();
-      if (r.models?.length) modelList.replaceChildren(...r.models.map((m) => h('option', { value: m })));
-      result.className = `test-result ${r.ok ? 'ok' : 'err'}`;
-      result.textContent = (r.ok ? '✓ ' : '✗ ') + r.message + (r.models?.length ? `（可用模型：${r.models.join('、')}）` : '') + (switched ? ` ${switched}` : '');
-      testBtn.disabled = false;
+    const engine = h('span', {});
+    const renderEngine = () => {
+      const c = getConfig();
+      const p = resolveProvider(c);
+      engine.textContent = c.mode === 'offline' ? '离线规则 AI（非 LLM）' : `${PROVIDERS[p.provider].label} · ${p.model || '未设置模型'}${p.reasoning ? ` · 推理 ${p.reasoning}/${p.decisionReasoning}` : ''}`;
     };
+    renderEngine();
+    const configBtn = h('button', { class: 'link', type: 'button', onclick: async () => { await showConfig(root, { inGame: null }); renderEngine(); } }, '修改配置');
 
     const start = h('button', { class: 'btn primary', type: 'submit' }, '开始游戏');
     const rulesBtn = h('button', { class: 'btn', type: 'button', onclick: onRules }, '规则说明');
+    const backBtn = h('button', { class: 'btn', type: 'button', style: 'margin-right:auto', onclick: () => { back.remove(); resolve(null); } }, '返回标题');
 
     const form = h(
       'form',
       { class: 'modal panel' },
-      h('h1', {}, '雾镇狼人夜'),
+      h('h1', {}, '新游戏'),
       h('div', { class: 'sub' }, '12 人屠边局 · 你与 11 位 AI 镇民 · 天黑请闭眼'),
-      h('h2', {}, 'AI 引擎'),
-      h(
-        'p',
-        { class: env.missing.length ? 'test-result err' : 'sub' },
-        env.missing.length
-          ? `.env 缺少 ${env.missing.join('、')}（参考 .env.example），请补全后刷新页面。`
-          : '默认值读取自项目根目录的 .env；在这里修改只对本次启动有效，长期修改请编辑 .env。',
-      ),
-      h(
-        'div',
-        { class: 'form' },
-        h('label', {}, '驱动方式'), mode,
-        h('label', {}, 'Base URL'), url,
-        h('label', {}, 'API Key'), key,
-        h('label', {}, '模型'), h('div', {}, model, modelList),
-        h('label', {}, '发言推理强度'), reasoning,
-        h('label', {}, '决策推理强度'), h('div', { class: 'inline' }, decisionReasoning, h('span', { class: 'sub', style: 'font-size:12px;white-space:nowrap' }, '投票 / 夜间技能 / 狼队沟通，调低可明显提速')),
-        h('label', {}, '跨域代理'), h('label', { class: 'check' }, proxy, '经开发服务器转发（本地服务拒绝浏览器跨域时需要）'),
-      ),
-      h('div', { class: 'inline', style: 'margin-top:10px;display:flex;gap:8px' }, testBtn),
-      result,
       h('h2', {}, '对局'),
       h(
         'div',
         { class: 'form' },
         h('label', {}, '你的名字'), name,
         h('label', {}, '身份'), role,
-        h('label', {}, '节奏'), pace,
         h('label', {}, '狼队沟通轮数'), wolfRounds,
         h('label', {}, '上帝视角'), h('label', { class: 'check' }, god, '显示所有身份与夜间信息（调试用，会剧透）'),
+        h('label', {}, 'AI 引擎'), h('div', { class: 'inline' }, engine, configBtn),
       ),
-      h('div', { class: 'actions' }, rulesBtn, start),
+      h('div', { class: 'actions' }, backBtn, rulesBtn, start),
     ) as HTMLFormElement;
     form.onsubmit = (e) => {
       e.preventDefault();
-      const out = read();
-      saveSettings(out);
+      const prefs = {
+        playerName: name.value.trim() || '旅人',
+        role: role.value as Settings['role'],
+        wolfChatRounds: Math.max(1, Math.min(5, Number(wolfRounds.value) || 3)),
+        godView: god.checked,
+      };
+      saveGamePrefs(prefs);
+      const { mode, paceMs } = getConfig();
       back.remove();
-      resolve(out);
+      resolve({ ...prefs, mode, paceMs, provider: resolveProvider() });
     };
     const back = h('div', { class: 'modal-back' }, form);
     root.appendChild(back);

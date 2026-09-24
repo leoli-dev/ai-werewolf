@@ -6,6 +6,9 @@
 
 type Bus = GainNode;
 
+/** Base mix of the three groups. */
+const MIX = { music: 0.55, sfx: 0.9, ambience: 0.6 };
+
 const midi = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
 
 export class AudioEngine {
@@ -28,6 +31,8 @@ export class AudioEngine {
   private melodyIdx = 3;
   private night = 0;
   private muted = false;
+  /** User volume per group (配置), 0..1, on top of the mix levels below. */
+  private levels = { music: 1, sfx: 1, ambience: 1 };
 
   get started() {
     return this.ctx !== null;
@@ -54,15 +59,15 @@ export class AudioEngine {
     this.reverbSend.gain.value = 0.9;
     this.reverbSend.connect(this.reverb).connect(this.master);
 
-    this.music = this.bus(0.55);
+    this.music = this.bus(MIX.music * this.levels.music);
     this.dayBus = ctx.createGain();
     this.nightBus = ctx.createGain();
     this.dayBus.gain.value = 1;
     this.nightBus.gain.value = 0;
     this.dayBus.connect(this.music);
     this.nightBus.connect(this.music);
-    this.sfx = this.bus(0.9);
-    this.amb = this.bus(0.6);
+    this.sfx = this.bus(MIX.sfx * this.levels.sfx);
+    this.amb = this.bus(MIX.ambience * this.levels.ambience);
 
     const len = ctx.sampleRate * 2;
     this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -75,6 +80,24 @@ export class AudioEngine {
     this.nextBeat = { day: now, night: now };
     this.schedTimer = window.setInterval(() => this.schedule(), 100);
     this.setNight(this.night === 1);
+  }
+
+  /** Freeze all sound (the game is paused); scheduled music waits with the clock. */
+  pause() {
+    void this.ctx?.suspend();
+  }
+
+  resume() {
+    void this.ctx?.resume();
+  }
+
+  setLevels(levels: { music: number; sfx: number; ambience: number }) {
+    this.levels = { ...levels };
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.music.gain.setTargetAtTime(MIX.music * levels.music, t, 0.05);
+    this.sfx.gain.setTargetAtTime(MIX.sfx * levels.sfx, t, 0.05);
+    this.amb.gain.setTargetAtTime(MIX.ambience * levels.ambience, t, 0.05);
   }
 
   setMuted(m: boolean) {

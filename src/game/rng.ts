@@ -4,6 +4,10 @@ export class Rng {
   constructor(seed = (Math.random() * 2 ** 32) >>> 0) {
     this.s = seed >>> 0;
   }
+  /** Internal state, for save games (`new Rng(state)` continues the same sequence). */
+  get state(): number {
+    return this.s;
+  }
   next(): number {
     let t = (this.s += 0x6d2b79f5);
     t = Math.imul(t ^ (t >>> 15), t | 1);

@@ -135,6 +135,10 @@ export class Stage {
   private focusRing: THREE.Mesh;
   private focusLight: THREE.SpotLight;
   private timer = new THREE.Timer();
+  /** Scene time; stands still while paused. */
+  private time = 0;
+  /** Freeze every animation (walks, doors, weather, animals); the frame keeps rendering. */
+  paused = false;
 
   private nightTarget = 0;
   private focusId: number | null = null;
@@ -299,8 +303,37 @@ export class Stage {
     return Promise.all(jobs).then(() => {});
   }
 
+  /**
+   * Jump straight to a resumed game's scene: graves and smashed doors for the
+   * dead, sealed dark houses for the exiled, everyone else indoors (night) or on
+   * the plaza, and `wolves` (seen by wolf players) out in the den.
+   */
+  restore(r: { dead: number[]; exiled: number[]; indoors: boolean; wolves: number[]; night: boolean }) {
+    this.resetAll();
+    for (const id of r.dead) this.killed(id, true);
+    for (const id of r.exiled) {
+      const a = this.actors[id];
+      a.status = 'exiled';
+      a.sprite.visible = false;
+      const h = this.town.houses[id];
+      h.lit = false;
+      h.state = 'sealed';
+      h.seal.visible = true;
+    }
+    for (const a of this.actors) {
+      if (a.status !== 'alive') continue;
+      if (r.wolves.includes(a.id)) {
+        a.sprite.visible = false;
+        a.wolf.visible = true;
+        a.wolf.position.copy(a.den);
+      } else a.sprite.visible = !r.indoors;
+    }
+    this.nightTarget = r.night ? 1 : 0;
+    this.atmo.mix = this.nightTarget;
+  }
+
   /** Killed (night kill, poison, hunter shot): a grave takes their place, their door is smashed. */
-  killed(id: number) {
+  killed(id: number, silent = false) {
     const a = this.actors[id];
     if (a.status !== 'alive') return;
     a.status = 'dead';
@@ -313,7 +346,7 @@ export class Stage {
     h.state = 'broken';
     h.debris.visible = true;
     h.doorPivot.visible = false; // torn off: it now lies on the ground (part of debris)
-    this.sounds?.doorBreak(this.falloff(h.doorstep));
+    if (!silent) this.sounds?.doorBreak(this.falloff(h.doorstep));
   }
 
   /** Exiled by vote: they walk out of town along the path; their house goes dark and is sealed. No grave. */
@@ -552,8 +585,9 @@ export class Stage {
 
   private frame() {
     this.timer.update();
-    const dt = Math.min(this.timer.getDelta(), 0.1);
-    const t = this.timer.getElapsed();
+    const dt = this.paused ? 0 : Math.min(this.timer.getDelta(), 0.1);
+    this.time += dt;
+    const t = this.time;
 
     // day/night easing
     this.atmo.mix += (this.nightTarget - this.atmo.mix) * Math.min(1, dt * 0.8);
