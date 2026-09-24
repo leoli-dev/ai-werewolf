@@ -89,6 +89,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 #banner .actor .timer { font-family: var(--pixel); font-size: 10px; color: var(--ink-faint); margin-left: 4px; }
 
+#topright .engine { font-size: 12px; padding: 0 10px; display: grid; place-items: center; color: var(--good); }
+#topright .engine.warn { color: var(--wolf); border-color: var(--blood); }
+.msg .kind.fallback { color: var(--wolf); border-color: var(--blood); }
+
 #topright { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }
 
 /* ── chat / transcript (right) ── */

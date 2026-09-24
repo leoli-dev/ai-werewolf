@@ -228,8 +228,10 @@ export class Game {
         }
         return choice;
       }
-      const text = await agent.speak(req, view);
+      const res = await agent.speak(req, view);
       this.guard();
+      const text = typeof res === 'string' ? res : res.text;
+      this.lastSpeechFallback = typeof res !== 'string' && !!res.fallback;
       return text.trim() || '（沉默）';
     } finally {
       this.setActor(null);
@@ -379,6 +381,7 @@ export class Game {
   }
 
   private nightDeaths: number[] = [];
+  private lastSpeechFallback = false;
 
   private async wolfTurn(): Promise<number | null> {
     const wolves = this.wolves().filter((w) => w.alive);
@@ -394,7 +397,7 @@ export class Game {
           const text = (await this.ask(w.id, { kind: 'wolfChat', round, rounds: this.wolfChatRounds, day }, `狼队沟通 ${round}/${this.wolfChatRounds}`)) as string;
           const bare = isPass(text);
           if (bare || /^\s*(pass|过)/i.test(text) || (text.length <= 30 && /没有?补充|没意见|pass/i.test(text))) passes++;
-          this.emit('wolfChat', bare ? '（没有补充）' : text, channel, { speaker: w.id });
+          this.emit('wolfChat', bare ? '（没有补充）' : text, channel, { speaker: w.id, data: this.lastSpeechFallback ? { fallback: true } : undefined });
         }
         if (passes === wolves.length) break;
       }
@@ -441,7 +444,7 @@ export class Game {
 
   private async speech(id: number, purpose: SpeechKind, label: string) {
     const text = (await this.ask(id, { kind: 'speech', purpose, day: this.state.day }, label)) as string;
-    this.emit('speech', text, { kind: 'public' }, { speaker: id, speechKind: purpose });
+    this.emit('speech', text, { kind: 'public' }, { speaker: id, speechKind: purpose, data: this.lastSpeechFallback ? { fallback: true } : undefined });
     await this.pace();
   }
 

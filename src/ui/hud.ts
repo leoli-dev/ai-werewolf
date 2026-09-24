@@ -58,6 +58,8 @@ export class GameUI {
   private actorSince = 0;
   private actorTimer = 0;
   readonly agent: Agent;
+  private engineChip = h('div', { class: 'engine panel', title: 'AI 引擎状态' });
+  private engineStats = { ok: 0, fail: 0, fallback: 0, lastMs: 0 };
 
   constructor(
     private root: HTMLElement,
@@ -133,6 +135,7 @@ export class GameUI {
     const topright = h(
       'div',
       { id: 'topright' },
+      this.engineChip,
       h('button', { class: 'btn', onclick: () => showRules(this.root) }, '规则说明'),
       h('button', { class: 'btn danger', onclick: () => confirm('放弃本局并返回设置？') && this.onRestart() }, '重新开局'),
     );
@@ -153,6 +156,74 @@ export class GameUI {
     }
     this.renderTabs();
     this.renderRoster();
+  }
+
+  setEngineMode(mode: 'llm' | 'offline') {
+    this.engineMode = mode;
+    this.renderEngine();
+  }
+  private engineMode: 'llm' | 'offline' = 'llm';
+
+  /** Telemetry from LLM agents. */
+  recordCall(ok: boolean, ms: number) {
+    if (ok) {
+      this.engineStats.ok++;
+      this.engineStats.lastMs = ms;
+    } else this.engineStats.fail++;
+    this.renderEngine();
+  }
+
+  private renderEngine() {
+    const st = this.engineStats;
+    if (this.engineMode === 'offline') {
+      this.engineChip.className = 'engine panel warn';
+      this.engineChip.textContent = '离线规则 AI（非 LLM）';
+      return;
+    }
+    const bad = st.fallback > 0;
+    this.engineChip.className = `engine panel ${bad ? 'warn' : ''}`;
+    this.engineChip.textContent = `LLM ● ${st.ok} 次${st.lastMs ? ` · 上次 ${(st.lastMs / 1000).toFixed(1)}s` : ''}${st.fail ? ` · 失败 ${st.fail}` : ''}${bad ? ` · 代打 ${st.fallback}` : ''}`;
+  }
+
+  /** The model failed for an AI player: pause and let the human decide. */
+  askFailure(info: { player: number; kind: string; error: string }): Promise<'retry' | 'fallback'> {
+    return new Promise((resolve) => {
+      const p = this.game.players[info.player];
+      const KIND: Record<string, string> = {
+        discussion: '发言', summary: '总结', lastWords: '遗言', defense: '正名', vote: '投票', revote: '再投',
+        wolfChat: '狼队沟通', wolfKill: '狼队投票', seer: '查验', guard: '守护', hunterShot: '开枪', witchSave: '救人', witchPoison: '用毒',
+      };
+      // never reveal who acts at night (would leak roles)
+      const secret = this.game.state.phase === 'night' && !this.godView;
+      const who = secret ? '夜间某位 AI 玩家行动' : `${seat(p.id)} ${p.name} 的「${KIND[info.kind] ?? info.kind}」`;
+      const done = (v: 'retry' | 'fallback') => {
+        back.remove();
+        if (v === 'fallback') {
+          this.engineStats.fallback++;
+          this.renderEngine();
+        }
+        resolve(v);
+      };
+      const back = h(
+        'div',
+        { class: 'modal-back' },
+        h(
+          'div',
+          { class: 'modal panel', role: 'alertdialog' },
+          h('h2', {}, 'AI 调用失败，游戏已暂停'),
+          h('p', {}, `${who}的请求没有拿到可用结果（已自动重试）。`),
+          h('p', { class: 'sub' }, info.error),
+          h('p', { class: 'sub' }, '可能原因：模型服务不可达、显存不足（HTTP 507）、另一个程序正在占用本地模型导致排队超时。'),
+          h(
+            'div',
+            { class: 'actions' },
+            h('button', { class: 'btn', onclick: () => done('fallback') }, '本次由规则 AI 代打'),
+            h('button', { class: 'btn primary', onclick: () => done('retry') }, '重试'),
+          ),
+        ),
+      );
+      this.root.appendChild(back);
+    });
   }
 
   destroy() {
@@ -340,7 +411,8 @@ export class GameUI {
     switch (e.type) {
       case 'speech': {
         const kind = { discussion: '', summary: '总结', lastWords: '遗言', defense: '正名' }[e.speechKind ?? 'discussion'];
-        el = h('div', { class: `msg ${e.speaker === this.me ? 'me' : ''}` }, who(e.speaker!), kind ? h('span', { class: 'kind' }, kind) : null, h('div', {}, e.text));
+        const fb = e.data?.fallback ? h('span', { class: 'kind fallback', title: '模型调用失败，由规则 AI 代发' }, '规则AI代打') : null;
+        el = h('div', { class: `msg ${e.speaker === this.me ? 'me' : ''}` }, who(e.speaker!), kind ? h('span', { class: 'kind' }, kind) : null, fb, h('div', {}, e.text));
         break;
       }
       case 'wolfChat':

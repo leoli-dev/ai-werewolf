@@ -118,8 +118,11 @@ export interface PlayerView {
   guard?: { lastGuarded: number | null };
 }
 
+/** `fallback` marks text produced by the rule AI instead of the model. */
+export type SpeechResult = string | { text: string; fallback?: boolean };
+
 export interface Agent {
-  speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<string>;
+  speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<SpeechResult>;
   choose(req: TargetRequest, view: PlayerView): Promise<number | null>;
 }
 

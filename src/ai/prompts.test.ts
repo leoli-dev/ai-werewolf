@@ -30,6 +30,10 @@ describe('cleanSpeech', () => {
     expect(cleanSpeech('3号艾德：我是好人。', view, '艾德')).toBe('我是好人。');
     expect(cleanSpeech('「我觉得5号是狼」', view, '艾德')).toBe('我觉得5号是狼');
   });
+  it('removes stage directions', () => {
+    expect(cleanSpeech('*打了个嗝，眯着眼*\n我觉得5号是狼。', view, '艾德')).toBe('我觉得5号是狼。');
+    expect(cleanSpeech('（清了清嗓子）我是好人。', view, '艾德')).toBe('我是好人。');
+  });
   it('keeps colons that are part of the speech', () => {
     expect(cleanSpeech('我的结论：5号是狼', view, '艾德')).toBe('我的结论：5号是狼');
   });

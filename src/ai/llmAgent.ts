@@ -1,4 +1,4 @@
-import type { Agent, PlayerView, SpeechRequest, TargetRequest, WolfChatRequest } from '../game/types';
+import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, WolfChatRequest } from '../game/types';
 import { seat } from '../game/types';
 import { MockAgent } from './mockAgent';
 import { cleanSpeech, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
@@ -6,6 +6,12 @@ import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type Se
 
 export interface AgentTelemetry {
   onCall?(info: { player: number; kind: string; ms: number; ok: boolean; error?: string }): void;
+  /**
+   * Called when the model could not produce a usable answer. Resolve 'retry'
+   * to try again, 'fallback' to let the rule AI act this once. Without this
+   * hook the agent falls back immediately (headless / tests).
+   */
+  onFailure?(info: { player: number; kind: string; error: string }): Promise<'retry' | 'fallback'>;
 }
 
 /**
@@ -33,7 +39,12 @@ export class LLMAgent implements Agent {
       { role: 'system', content: systemPrompt(view, this.persona) },
       {
         role: 'user',
-        content: `【共享发言记录本】\n${sharedNotebook(view)}\n\n【你的私人记录本】\n${privateNotebook(view, this.notes)}\n\n【当前任务】\n${task}`,
+        content: [
+          `【共享发言记录本 · 之前几天】\n${sharedNotebook(view, { before: view.day })}`,
+          `【你的私人记录本】\n${privateNotebook(view, this.notes)}`,
+          `【今天的发言（第 ${view.day} 天，按顺序）】\n${sharedNotebook(view, { onlyDay: view.day })}`,
+          `【当前任务】\n${task}`,
+        ].join('\n\n'),
       },
     ];
   }
@@ -58,27 +69,43 @@ export class LLMAgent implements Agent {
     throw new Error(lastErr);
   }
 
-  async speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<string> {
-    try {
-      const raw = await this.call(req.kind === 'wolfChat' ? 'wolfChat' : req.purpose, this.messages(view, speechTask(req, view)), 2000);
-      return cleanSpeech(raw, view, this.persona.name);
-    } catch {
-      return this.fallback.speak(req, view);
+  /** Ask the host whether to retry after a failure; false = use the rule AI. */
+  private async shouldRetry(kind: string, error: string): Promise<boolean> {
+    if (!this.telemetry.onFailure) return false;
+    return (await this.telemetry.onFailure({ player: this.id, kind, error })) === 'retry';
+  }
+
+  async speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<SpeechResult> {
+    const kind = req.kind === 'wolfChat' ? 'wolfChat' : req.purpose;
+    while (true) {
+      try {
+        const raw = await this.call(kind, this.messages(view, speechTask(req, view)), 2000);
+        return cleanSpeech(raw, view, this.persona.name);
+      } catch (e) {
+        if (await this.shouldRetry(kind, (e as Error).message)) continue;
+        return { text: await this.fallback.speak(req, view) as string, fallback: true };
+      }
     }
   }
 
   async choose(req: TargetRequest, view: PlayerView): Promise<number | null> {
-    let raw = '';
-    try {
-      raw = await this.call(req.action, this.messages(view, targetTask(req, view)), 1500);
-    } catch {
-      return this.fallback.choose(req, view);
+    while (true) {
+      let raw = '';
+      try {
+        raw = await this.call(req.action, this.messages(view, targetTask(req, view)), 1500);
+      } catch (e) {
+        if (await this.shouldRetry(req.action, (e as Error).message)) continue;
+        return this.fallback.choose(req, view);
+      }
+      const { target, reason } = parseTarget(raw, req);
+      if (target === undefined) {
+        if (await this.shouldRetry(req.action, `无法从模型输出中解析目标：${raw.slice(0, 80)}`)) continue;
+        return this.fallback.choose(req, view);
+      }
+      const tag = { vote: '投票', revote: '再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', witchSave: '救', witchPoison: '毒' }[req.action];
+      this.notes.push(`第${req.day}${['vote', 'revote'].includes(req.action) ? '天' : '夜'}${tag}${target === null ? '：放弃' : ` ${seat(target)}`}${reason ? `（${reason}）` : ''}`);
+      if (this.notes.length > 40) this.notes.splice(0, this.notes.length - 40);
+      return target;
     }
-    const { target, reason } = parseTarget(raw, req);
-    if (target === undefined) return this.fallback.choose(req, view);
-    const tag = { vote: '投票', revote: '再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', witchSave: '救', witchPoison: '毒' }[req.action];
-    this.notes.push(`第${req.day}${['vote', 'revote'].includes(req.action) ? '天' : '夜'}${tag}${target === null ? '：放弃' : ` ${seat(target)}`}${reason ? `（${reason}）` : ''}`);
-    if (this.notes.length > 40) this.notes.splice(0, this.notes.length - 40);
-    return target;
   }
 }

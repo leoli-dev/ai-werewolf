@@ -69,7 +69,10 @@ ${RULES_TEXT}
 
 【身份策略】${ROLE_GUIDE[self.role]}
 
-【表达要求】用简体中文，口语化，符合你的性格；提到玩家时用「N号」。不要输出任何思考过程、标签或旁白。`;
+【表达要求】
+- 用简体中文口语，性格只影响语气，内容必须是基于场上信息的推理。
+- 提到玩家时用「N号」。
+- 只输出你说出口的台词：不要写动作、神态、旁白（禁止 *…*、（…）这类描写），不要输出思考过程或标签。`;
 }
 
 function fmtEvent(e: GameEvent, view: PlayerView): string | null {
@@ -88,15 +91,25 @@ function fmtEvent(e: GameEvent, view: PlayerView): string | null {
   }
 }
 
-/** 共享发言记录本：所有人都能看到的公开内容。 */
-export function sharedNotebook(view: PlayerView, maxChars = 24000): string {
+/** 共享发言记录本：所有人都能看到的公开内容。`day` 给定时只取该天之前 / 当天。 */
+export function sharedNotebook(view: PlayerView, opts: { before?: number; onlyDay?: number; maxChars?: number } = {}): string {
+  const maxChars = opts.maxChars ?? 20000;
   const lines = view.events
     .filter((e) => e.visibility.kind === 'public')
+    .filter((e) => (opts.before === undefined || e.day < opts.before) && (opts.onlyDay === undefined || e.day === opts.onlyDay))
     .map((e) => fmtEvent(e, view))
     .filter((x): x is string => !!x);
   let text = lines.join('\n');
   if (text.length > maxChars) text = '…（更早的记录已省略）\n' + text.slice(-maxChars);
   return text || '（暂无）';
+}
+
+/** Speeches already made today, for the "respond to others" instruction. */
+export function todaysSpeakers(view: PlayerView): number[] {
+  const ids = view.events
+    .filter((e) => e.type === 'speech' && e.day === view.day && e.speaker !== undefined && e.speaker !== view.self.id)
+    .map((e) => e.speaker!);
+  return [...new Set(ids)];
 }
 
 /** 角色私本：只属于自己的信息 + 自己记下的心得。 */
@@ -139,9 +152,14 @@ ${aliveList(view)}
     lastWords: '你被投票放逐了，这是你的遗言。可以公开身份、留下信息或指认你认为的狼人。',
     defense: '你在投票中平票了，现在为自己正名，说服大家不要投你。',
   }[req.purpose];
+  const prior = todaysSpeakers(view);
+  const respond = prior.length
+    ? `今天在你之前已有 ${prior.map(seat).join('、')} 发言（见上方【今天的发言】）。你必须具体回应其中至少两人：点名并引用或概括他们说过的内容，说明你同意/反对的理由；同时结合昨夜的死亡情况、身份声明（例如谁跳了预言家、报了什么查验）和之前的投票。不要说泛泛的「XX发言奇怪」而不给出依据。`
+    : '你是今天第一个发言的人，还没有人说话。结合昨夜结果和之前几天的记录（如果有）开个头，给出你的初步判断，不要编造别人说过的话。';
   return `现在是第 ${req.day} 天。${aliveList(view)}
 ${what}
-150 字以内，直接输出发言内容。`;
+${respond}
+200 字以内，直接输出发言内容。`;
 }
 
 const ACTION_TEXT: Record<TargetRequest['action'], string> = {
@@ -201,6 +219,8 @@ export function cleanSpeech(text: string, view: PlayerView, personaName: string)
   if (colon > 0 && (head.slice(0, colon).includes(seat(view.self.id)) || head.slice(0, colon).includes(personaName))) {
     s = s.slice(colon + 1).trim();
   }
+  // stage directions the model sometimes adds: *打了个嗝*, （眯着眼）
+  s = s.replace(/\*[^*\n]{0,80}\*/g, '').replace(/^[（(][^）)\n]{0,40}[）)]\s*/, '').trim();
   s = s.replace(/^["“「]+|["”」]+$/g, '');
   return s.slice(0, 400);
 }

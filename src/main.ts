@@ -53,18 +53,13 @@ async function play(settings: Settings) {
 
   const provider = new OpenAICompatibleProvider(settings.provider);
   const queue = new SerialQueue();
-  let warned = false;
+  ui.setEngineMode(settings.mode);
   const agents: Agent[] = names.map((_, i) => {
     if (i === humanSeat) return ui!.agent;
     if (settings.mode === 'offline') return new MockAgent(rng.int(1e9), 600);
     return new LLMAgent(i, personas[i], provider, queue, {
-      onCall: (c) => {
-        if (!c.ok && !warned) {
-          warned = true;
-          toast(`AI 调用失败，已用规则 AI 兜底：${c.error}`);
-          setTimeout(() => (warned = false), 15000);
-        }
-      },
+      onCall: (c) => ui?.recordCall(c.ok, c.ms),
+      onFailure: (info) => ui!.askFailure(info),
     });
   });
   game.setAgents(agents);
