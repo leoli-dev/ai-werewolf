@@ -12,7 +12,7 @@ export const ROLE_NAME: Record<Role, string> = {
 
 export const GOD_ROLES: Role[] = ['seer', 'witch', 'hunter', 'guard'];
 
-/** 12 人屠边局：4 狼 / 4 民 / 预言家 女巫 猎人 守卫 */
+/** 12 人局：4 狼 / 4 民 / 预言家 女巫 猎人 守卫 */
 export const STANDARD_BOARD: Role[] = [
   'werewolf', 'werewolf', 'werewolf', 'werewolf',
   'villager', 'villager', 'villager', 'villager',

@@ -1,6 +1,5 @@
 import { Rng } from './rng';
 import {
-  GOD_ROLES,
   ROLE_NAME,
   STANDARD_BOARD,
   seat,
@@ -208,11 +207,12 @@ export class Game {
     return this.players.filter((p) => p.role === 'werewolf');
   }
 
+  /** Good wins once every wolf is gone; wolves win as soon as they outnumber the rest (they carry every vote). */
   checkWinner(): Winner {
     const alive = this.alive();
-    if (!alive.some((p) => p.role === 'werewolf')) return 'good';
-    if (!alive.some((p) => p.role === 'villager')) return 'wolf';
-    if (!alive.some((p) => GOD_ROLES.includes(p.role))) return 'wolf';
+    const wolves = alive.filter((p) => p.role === 'werewolf').length;
+    if (wolves === 0) return 'good';
+    if (wolves > alive.length - wolves) return 'wolf';
     return null;
   }
 
@@ -388,7 +388,12 @@ export class Game {
     this.state.winner = w;
     this.setPhase('ended');
     const roster = this.players.map((p) => `${seat(p.id)}${p.name}：${ROLE_NAME[p.role]}`).join('，');
-    this.gm(w === 'good' ? '所有狼人已被放逐，好人阵营获胜！' : '狼人屠边成功，狼人阵营获胜！');
+    const wolves = this.alive().filter((p) => p.role === 'werewolf').length;
+    this.gm(
+      w === 'good'
+        ? '所有狼人均已出局，好人阵营获胜！'
+        : `场上剩余 ${wolves} 名狼人、${this.alive().length - wolves} 名好人，狼人人数已超过好人，狼人阵营获胜！`,
+    );
     this.gm(`身份公开：${roster}`);
     return true;
   }
@@ -404,7 +409,7 @@ export class Game {
       }
       this.gm(text, [p.id]);
     }
-    this.gm('游戏开始。12 人屠边局：4 狼人、4 村民、预言家、女巫、猎人、守卫。');
+    this.gm('游戏开始。12 人局：4 狼人、4 村民、预言家、女巫、猎人、守卫。');
     while (true) {
       this.state.day += 1;
       await this.night();

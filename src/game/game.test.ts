@@ -26,6 +26,31 @@ describe('Game engine', () => {
     }
   });
 
+  it('wolves win once they outnumber the good side; good wins only when every wolf is gone', () => {
+    const g = simulate(1);
+    const kill = (n: number, pred: (r: string) => boolean) => {
+      for (const p of g.players.filter((p) => p.alive && pred(p.role)).slice(0, n)) p.alive = false;
+    };
+    expect(g.checkWinner()).toBeNull(); // 4 wolves vs 8
+    // every god dead is no longer a win on its own (4 wolves vs 4 villagers)
+    kill(4, (r) => r !== 'werewolf' && r !== 'villager');
+    expect(g.checkWinner()).toBeNull();
+    // 4 wolves vs 3: wolves carry every vote
+    kill(1, (r) => r === 'villager');
+    expect(g.checkWinner()).toBe('wolf');
+
+    const h = simulate(2);
+    for (const p of h.players.filter((p) => p.role !== 'werewolf').slice(0, 6)) p.alive = false;
+    for (const p of h.players.filter((p) => p.role === 'werewolf').slice(0, 2)) p.alive = false;
+    expect(h.checkWinner()).toBeNull(); // 2 wolves vs 2: a tie plays on
+    // one wolf left against one good player: still not over
+    h.players.find((p) => p.alive && p.role === 'werewolf')!.alive = false;
+    h.players.find((p) => p.alive && p.role !== 'werewolf')!.alive = false;
+    expect(h.checkWinner()).toBeNull();
+    h.players.find((p) => p.alive && p.role === 'werewolf')!.alive = false;
+    expect(h.checkWinner()).toBe('good');
+  });
+
   it('runs 300 seeded games to a winner while respecting rule invariants', async () => {
     const wins = { good: 0, wolf: 0 };
     for (let seed = 1; seed <= 300; seed++) {

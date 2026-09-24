@@ -34,7 +34,7 @@ def make_messages(i, role, transcript_len):
     # simulate accumulated shared transcript (all players' day speeches so far)
     filler = "3号发言可疑，一直在避重就轻；昨夜刀口在5号，女巫未救，可能是无解药或认5号是狼。"
     transcript = (filler * (transcript_len // 40 + 1))[:transcript_len]
-    system = (f"你在玩12人狼人杀（4狼4民4神屠边局）。你的角色：{role}。"
+    system = (f"你在玩12人狼人杀（4狼4民4神）。你的角色：{role}。"
               "白天讨论阶段，请根据当前发言记录给出你的分析与投票倾向，"
               "120字以内，不要暴露真实身份。")
     user = f"【共享发言记录（截断）】{transcript}\n\n轮到第{i+1}个玩家（你）发言。"

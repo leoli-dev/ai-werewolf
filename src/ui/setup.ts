@@ -36,7 +36,7 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
       'form',
       { class: 'modal panel' },
       h('h1', {}, '新游戏'),
-      h('div', { class: 'sub' }, '12 人屠边局 · 你与 11 位 AI 镇民 · 天黑请闭眼'),
+      h('div', { class: 'sub' }, '12 人局 · 你与 11 位 AI 镇民 · 天黑请闭眼'),
       h('h2', {}, '对局'),
       h(
         'div',

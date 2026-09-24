@@ -63,7 +63,7 @@ export function showTitle(
         { class: 'title-card' },
         h('div', { class: 'kicker' }, 'A  WEREWOLF  TALE'),
         h('h1', {}, '雾镇狼人夜'),
-        h('div', { class: 'tagline' }, '12 人屠边局 · 你与 11 位 AI 镇民 · 天黑请闭眼'),
+        h('div', { class: 'tagline' }, '12 人局 · 你与 11 位 AI 镇民 · 天黑请闭眼'),
         h(
           'nav',
           { class: 'title-menu' },
