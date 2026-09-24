@@ -300,7 +300,10 @@ export class GameUI {
     }
     if (!this.canSee(e)) return;
     if ((e.type === 'speech' || e.type === 'wolfChat') && e.speaker !== undefined) {
-      this.bubbles.set(e.speaker, { text: e.text, until: performance.now() + 9000 });
+      // only the latest speaker keeps a bubble: the previous one disappears once
+      // the next person has finished speaking (i.e. their speech arrives)
+      this.bubbles.clear();
+      this.bubbles.set(e.speaker, { text: e.text, until: Infinity });
     }
     if (this.matches(e)) this.appendMsg(e);
     if (e.type === 'private' || e.type === 'gm' || e.type === 'death') this.renderRoster();
@@ -377,11 +380,18 @@ export class GameUI {
   // ───────────────────────── scene choreography ─────────────────────────
 
   private pendingExile = new Set<number>();
+  private bubbleScope = '';
   private wolvesShown: number[] = [];
   private lastHowlStep: string | null = null;
 
   /** Map engine state changes onto scene animation (howls, exiles). */
   private choreograph(s: GameState) {
+    // night ↔ day: wipe leftover bubbles from the previous part of the round
+    const bubbleScope = `${s.day}:${s.phase === 'night' ? 'night' : 'day'}`;
+    if (bubbleScope !== this.bubbleScope) {
+      this.bubbleScope = bubbleScope;
+      this.bubbles.clear();
+    }
     const stepKey = `${s.day}:${s.nightStep}`;
     if (s.nightStep === 'wolves' && this.lastHowlStep !== stepKey) {
       this.lastHowlStep = stepKey;
