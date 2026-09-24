@@ -108,6 +108,32 @@ describe('Game engine', () => {
     expect(g.events.some((e) => e.text.includes('【女巫】'))).toBe(true);
   });
 
+  it('wolf chat skips the human and goes to the vote once AI wolves have nothing to add', async () => {
+    const g = new Game({ names, humanSeat: 0, humanRole: 'werewolf', seed: 5, wolfChatRounds: 3 });
+    const humanRounds: number[] = [];
+    const cues: string[] = [];
+    const agent: Agent = {
+      speak: async (r) => (r.kind === 'wolfChat' && r.round === 1 ? '刀 12 号' : 'pass'),
+      choose: async (r) => {
+        if (r.day > 1) throw new Error('stop');
+        return r.allowSkip ? null : r.candidates[r.candidates.length - 1];
+      },
+    };
+    const human: Agent = {
+      speak: async (r) => {
+        if (r.kind === 'wolfChat') humanRounds.push(r.round);
+        return '好';
+      },
+      choose: agent.choose,
+    };
+    const g2 = new Game({ names, humanSeat: 0, humanRole: 'werewolf', seed: 5, wolfChatRounds: 3 }, { cue: async (c) => void cues.push(c) });
+    for (const game of [g, g2]) game.setAgents(names.map((_, i) => (i === 0 ? human : agent)));
+    await g2.run().catch(() => {});
+    // round 1: everyone talks; round 2: AI wolves all pass -> human not asked, no round 3
+    expect(humanRounds).toEqual([1]);
+    expect(cues.slice(0, 4)).toEqual(['nightfall', 'wolvesOut', 'wolvesIn', 'dawn']);
+  });
+
   it('guard blocks the wolf kill but not poison', async () => {
     const g = new Game({ names, humanSeat: -1, seed: 7, wolfChatRounds: 1 });
     const villager = g.players.find((p) => p.role === 'villager')!.id;

@@ -6,6 +6,15 @@ export const RING_HOUSE_R = 16;
 export const RING_PLAYER_R = 11.5;
 export const CHURCH_POS = new THREE.Vector3(0, 0, -36);
 
+/** Waypoints of the path exiles take out of town (south, away from the church). */
+export const EXIT_PATH = [
+  new THREE.Vector3(0, 0, 12.2),
+  new THREE.Vector3(0, 0, 19),
+  new THREE.Vector3(1.2, 0, 30),
+  new THREE.Vector3(-0.8, 0, 44),
+  new THREE.Vector3(0.6, 0, 62),
+];
+
 export function seatAngle(i: number) {
   // seat 1 at the south (towards the default camera), then clockwise from above
   return Math.PI / 2 + (i / 12) * Math.PI * 2 + Math.PI / 12;
@@ -45,9 +54,24 @@ function roofGeometry(w: number, d: number, h: number) {
   return g;
 }
 
+export interface HouseRefs {
+  group: THREE.Group;
+  doorPivot: THREE.Group;
+  windows: THREE.MeshStandardMaterial[];
+  /** Window glow at night; false once the owner is gone. */
+  lit: boolean;
+  /** World position just outside / inside the door. */
+  doorstep: THREE.Vector3;
+  inside: THREE.Vector3;
+  seal: THREE.Group;
+  debris: THREE.Group;
+  state: 'normal' | 'broken' | 'sealed';
+}
+
 export interface TownRefs {
   root: THREE.Group;
-  /** Warm light sources (window glow + lanterns) toggled for night. */
+  houses: HouseRefs[];
+  /** Church window glow (house windows live in `houses`). */
   windows: THREE.MeshStandardMaterial[];
   lanterns: THREE.PointLight[];
   lanternFlames: THREE.Mesh[];
@@ -60,7 +84,7 @@ export interface TownRefs {
 export function buildTown(): TownRefs {
   const rng = new Rng(42);
   const root = new THREE.Group();
-  const refs: TownRefs = { root, windows: [], lanterns: [], lanternFlames: [], billboards: [], perches: [], fliesSpots: [] };
+  const refs: TownRefs = { root, houses: [], windows: [], lanterns: [], lanternFlames: [], billboards: [], perches: [], fliesSpots: [] };
 
   // ground
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), mat('grass', [60, 60]));
@@ -86,13 +110,25 @@ export function buildTown(): TownRefs {
   road.receiveShadow = true;
   root.add(road);
 
+  // 出镇小路: a narrow dirt track south, between seat 12 and seat 1 (the exiles' way out)
+  for (let k = 0; k < EXIT_PATH.length - 1; k++) {
+    const a = EXIT_PATH[k], b = EXIT_PATH[k + 1];
+    const len = a.distanceTo(b) + 0.6;
+    const seg = new THREE.Mesh(new THREE.PlaneGeometry(2.2, len), mat('dirt', [0.6, len / 4], 3 + k));
+    seg.rotation.x = -Math.PI / 2;
+    seg.rotation.z = -Math.atan2(b.x - a.x, b.z - a.z);
+    seg.position.set((a.x + b.x) / 2, 0.013, (a.z + b.z) / 2);
+    seg.receiveShadow = true;
+    root.add(seg);
+  }
+
   // houses
   for (let i = 0; i < 12; i++) root.add(house(i, rng, refs));
 
   // fences between houses
   for (let i = 0; i < 12; i++) {
     const a = seatAngle(i) + Math.PI / 12;
-    if (Math.abs(Math.sin(a) + 1) < 0.02) continue; // leave the church road open
+    if (Math.abs(Math.abs(Math.sin(a)) - 1) < 0.02) continue; // leave the church road and the exit path open
     const p = new THREE.Vector3(Math.cos(a) * (RING_HOUSE_R + 0.5), 0, Math.sin(a) * (RING_HOUSE_R + 0.5));
     const f = fence(3.2, rng.next() < 0.5, rng);
     f.position.copy(p);
@@ -202,10 +238,64 @@ function house(i: number, rng: Rng, refs: TownRefs): THREE.Group {
     ch.position.set(w * 0.25, h + roofH * 0.6, d * 0.2);
     g.add(ch);
   }
-  // door (faces +z locally; group rotated to face the plaza)
-  const door = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.6), mat('darkwood', [0.4, 0.6], i));
-  door.position.set(0, 0.8 + 0.25, d / 2 + 0.01);
-  g.add(door);
+  // doorway (dark interior visible when the door swings open)
+  const doorway = new THREE.Mesh(new THREE.PlaneGeometry(0.92, 1.62), new THREE.MeshBasicMaterial({ color: 0x070504 }));
+  doorway.position.set(0, 0.8 + 0.25, d / 2 + 0.006);
+  g.add(doorway);
+  // door on a hinge at its left edge (faces +z locally; group rotated to face the plaza)
+  const doorPivot = new THREE.Group();
+  doorPivot.position.set(-0.45, 0.25, d / 2 + 0.035);
+  const doorMat = mat('darkwood', [0.4, 0.6], i);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.6, 0.06), doorMat);
+  door.position.set(0.45, 0.8, 0);
+  doorPivot.add(door);
+  g.add(doorPivot);
+  // 封条: two crossed paper strips (hidden until exile)
+  const seal = new THREE.Group();
+  const sealMat = new THREE.MeshStandardMaterial({ map: sealTexture(), roughness: 1, side: THREE.DoubleSide });
+  for (const a of [0.9, -0.9]) {
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.24), sealMat);
+    strip.rotation.z = a;
+    strip.position.z = a > 0 ? 0 : 0.01;
+    seal.add(strip);
+  }
+  seal.position.set(0, 1.05, d / 2 + 0.1);
+  seal.visible = false;
+  g.add(seal);
+  // smashed door (hidden until killed): the door lies torn off on the ground,
+  // splintered boards hang in the frame, claw marks gouge the wall, blood on the step
+  const debris = new THREE.Group();
+  const fallen = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.06, 1.6), doorMat);
+  fallen.position.set(0.25, 0.04, d / 2 + 1.05);
+  fallen.rotation.set(0, 0.5, 0.06);
+  debris.add(fallen);
+  for (const [x, y, rz] of [[-0.3, 1.5, 0.9], [0.25, 0.55, -0.7]] as const) {
+    const shard = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.12, 0.05), doorMat);
+    shard.position.set(x, y, d / 2 + 0.05);
+    shard.rotation.z = rz;
+    debris.add(shard);
+  }
+  for (let k = 0; k < 6; k++) {
+    const plank = new THREE.Mesh(new THREE.BoxGeometry(0.35 + rng.next() * 0.5, 0.05, 0.12), doorMat);
+    plank.position.set((rng.next() - 0.5) * 2.2, 0.03, d / 2 + 0.5 + rng.next() * 1.6);
+    plank.rotation.y = rng.next() * Math.PI;
+    debris.add(plank);
+  }
+  const clawMat = new THREE.MeshBasicMaterial({ map: clawTexture(), transparent: true, depthWrite: false });
+  for (const x of [-0.95, 0.95]) {
+    const claw = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.05), clawMat);
+    claw.position.set(x, 1.35, d / 2 + 0.02);
+    claw.scale.x = x < 0 ? -1 : 1;
+    debris.add(claw);
+  }
+  const blood = new THREE.Mesh(new THREE.CircleGeometry(0.7, 10), new THREE.MeshBasicMaterial({ color: 0x4a0a08, transparent: true, opacity: 0.8, depthWrite: false }));
+  blood.rotation.x = -Math.PI / 2;
+  blood.position.set(-0.2, 0.03, d / 2 + 0.6);
+  blood.scale.set(1.3, 0.8, 1);
+  debris.add(blood);
+  debris.visible = false;
+  g.add(debris);
+  const houseWindows: THREE.MeshStandardMaterial[] = [];
   // windows (emissive at night; some boarded)
   for (const x of [-w / 3.2, w / 3.2]) {
     const boarded = rng.next() < 0.3;
@@ -215,7 +305,7 @@ function house(i: number, rng: Rng, refs: TownRefs): THREE.Group {
       emissiveIntensity: 0,
       roughness: 0.6,
     });
-    if (!boarded) refs.windows.push(wm);
+    if (!boarded) houseWindows.push(wm);
     const win = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7), wm);
     win.position.set(x, h * 0.6, d / 2 + 0.02);
     g.add(win);
@@ -238,7 +328,58 @@ function house(i: number, rng: Rng, refs: TownRefs): THREE.Group {
   g.position.copy(p);
   // face the plaza: local +z should point at the centre
   g.rotation.y = Math.atan2(-p.x, -p.z);
-  return shadowy(g);
+  g.updateMatrixWorld(true);
+  shadowy(g);
+  refs.houses.push({
+    group: g,
+    doorPivot,
+    windows: houseWindows,
+    lit: true,
+    doorstep: g.localToWorld(new THREE.Vector3(0.1, 0, d / 2 + 0.9)),
+    inside: g.localToWorld(new THREE.Vector3(0.1, 0, d / 2 - 0.5)),
+    seal,
+    debris,
+    state: 'normal',
+  });
+  return g;
+}
+
+/** 封条 strip: aged paper with red stamp characters. */
+function sealTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 8;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#e8dcc0';
+  ctx.fillRect(0, 0, 64, 8);
+  ctx.fillStyle = 'rgba(120,100,70,0.35)';
+  for (let x = 0; x < 64; x += 5) ctx.fillRect(x, (x * 7) % 8, 2, 1);
+  ctx.fillStyle = '#b02a20';
+  ctx.font = 'bold 7px serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('封　　封　　封', 4, 4.5);
+  return pixelTexture(c);
+}
+
+/** Claw marks gouged into the wall beside a broken door. */
+function clawTexture() {
+  const c = document.createElement('canvas');
+  c.width = 16;
+  c.height = 20;
+  const ctx = c.getContext('2d')!;
+  for (let k = 0; k < 4; k++) {
+    for (let y = 0; y < 16; y++) {
+      const x = 2 + k * 3 + Math.floor(y / 4);
+      ctx.fillStyle = 'rgba(14,6,4,0.95)';
+      ctx.fillRect(x, 2 + y, 1, 1);
+      ctx.fillStyle = 'rgba(150,24,18,0.75)';
+      ctx.fillRect(x + 1, 2 + y, 1, 1);
+    }
+  }
+  ctx.fillStyle = 'rgba(140,18,14,0.8)';
+  ctx.fillRect(5, 18, 2, 2);
+  ctx.fillRect(10, 17, 1, 3);
+  return pixelTexture(c);
 }
 
 function numberSign(n: number) {

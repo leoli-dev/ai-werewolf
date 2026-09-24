@@ -1,4 +1,4 @@
-import type { Game, GameState } from '../game/game';
+import type { Game, GameState, NightStep, SceneCue } from '../game/game';
 import { canSee } from '../game/game';
 import {
   ROLE_NAME,
@@ -14,6 +14,7 @@ import {
 } from '../game/types';
 import { characterCanvas, paletteFor } from '../render/pixel';
 import type { ScreenPos, Stage } from '../render/stage';
+import { audio } from '../audio/audio';
 import { h } from './dom';
 import { showRules } from './rules';
 
@@ -39,20 +40,14 @@ const ACTION_TITLE: Record<TargetRequest['action'], string> = {
 
 type Tab = 'round' | 'all' | 'wolf' | 'private';
 
-/**
- * Night step as the GM announces it publicly (role, not seat). Skips anything
- * that would leak private state, e.g. whether the witch is being asked to save.
- */
-function nightPublicLabel(label: string): string {
-  const wolfRound = label.match(/^狼队沟通 (\d+)\/(\d+)/);
-  if (wolfRound) return `狼人正在密谋（第 ${wolfRound[1]}/${wolfRound[2]} 轮）`;
-  if (label.startsWith('狼队')) return '狼人正在投票';
-  if (label.startsWith('预言家')) return '预言家正在查验';
-  if (label.startsWith('守卫')) return '守卫正在守护';
-  if (label.startsWith('猎人')) return '猎人正在考虑';
-  if (label.startsWith('女巫')) return '女巫正在用药';
-  return '夜幕下有人在行动';
-}
+/** Public night-step names (GM announces the turn, never what the role does). */
+const NIGHT_STEP_NAME: Record<NightStep, string> = {
+  seer: '预言家轮',
+  guard: '守卫轮',
+  wolves: '狼人轮',
+  hunter: '猎人轮',
+  witch: '女巫轮',
+};
 
 export class GameUI {
   private hud!: HTMLElement;
@@ -70,6 +65,8 @@ export class GameUI {
   private pendingTarget: { req: TargetRequest; select: (id: number) => void } | null = null;
   private lastPhase = '';
   private clock!: HTMLElement;
+  private stepEl!: HTMLElement;
+  private lastStep: NightStep | null = null;
   private clockTimer = 0;
   private actorKey = '';
   private actorSince = 0;
@@ -163,6 +160,7 @@ export class GameUI {
       'div',
       { id: 'topright' },
       this.engineChip,
+      this.muteBtn(),
       h('button', { class: 'btn', onclick: () => showRules(this.root) }, '规则说明'),
       h('button', { class: 'btn danger', onclick: () => confirm('放弃本局并返回设置？') && this.onRestart() }, '重新开局'),
     );
@@ -174,7 +172,8 @@ export class GameUI {
 
     this.action = h('div', { id: 'action', class: 'panel' });
 
-    this.root.append(this.hud, this.banner, topright, chat, this.action);
+    this.stepEl = h('div', { id: 'nightstep', 'aria-live': 'polite' });
+    this.root.append(this.hud, this.banner, topright, chat, this.action, this.stepEl);
 
     for (let i = 0; i < 12; i++) {
       const el = h('div', { class: 'label' });
@@ -183,6 +182,28 @@ export class GameUI {
     }
     this.renderTabs();
     this.renderRoster();
+  }
+
+  private muteBtn() {
+    let muted = false;
+    try {
+      muted = localStorage.getItem('ai-werewolf:muted') === '1';
+    } catch {
+      /* ignore */
+    }
+    audio.setMuted(muted);
+    const b = h('button', { class: 'btn', title: '声音开关' }, muted ? '♪ 关' : '♪ 开');
+    b.onclick = () => {
+      muted = !muted;
+      audio.setMuted(muted);
+      b.textContent = muted ? '♪ 关' : '♪ 开';
+      try {
+        localStorage.setItem('ai-werewolf:muted', muted ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+    };
+    return b;
   }
 
   setEngineMode(mode: 'llm' | 'offline') {
@@ -265,7 +286,18 @@ export class GameUI {
   // ───────────────────────── game hooks ─────────────────────────
 
   onEvent(e: GameEvent) {
-    if (e.type === 'death') this.stage.setAlive(e.data!.id as number, false);
+    if (e.type === 'death') {
+      const id = e.data!.id as number;
+      // exiles walk home after their last words; everyone else leaves a grave now
+      if (e.data!.cause === 'vote') this.pendingExile.add(id);
+      else this.stage.killed(id);
+    }
+    if (e.type === 'gm' && e.text.startsWith('天亮了')) {
+      // the rooster crows first, then the GM's verdict sting
+      audio.rooster();
+      const peaceful = e.text.includes('平安夜');
+      setTimeout(() => (peaceful ? audio.peaceful() : audio.death()), 2600);
+    }
     if (!this.canSee(e)) return;
     if ((e.type === 'speech' || e.type === 'wolfChat') && e.speaker !== undefined) {
       this.bubbles.set(e.speaker, { text: e.text, until: performance.now() + 9000 });
@@ -277,7 +309,9 @@ export class GameUI {
   onState(s: GameState) {
     const night = s.phase === 'night';
     this.stage.setNight(night);
+    audio.setNight(night);
     this.stage.focus(s.actor);
+    this.choreograph(s);
     const phaseName: Record<string, string> = {
       setup: '准备中',
       night: `第 ${s.day} 夜`,
@@ -300,7 +334,7 @@ export class GameUI {
         this.actorSince = performance.now();
         const timer = h('span', { class: 'timer' });
         actorEl.replaceChildren(
-          hidden ? nightPublicLabel(s.actorLabel) : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
+          hidden ? '夜幕下' : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
           h('span', { class: 'dots' }),
           s.actor === this.me ? '' : timer,
         );
@@ -316,6 +350,17 @@ export class GameUI {
       clearInterval(this.actorTimer);
       actorEl.textContent = '';
     }
+    if (s.nightStep !== this.lastStep) {
+      this.lastStep = s.nightStep;
+      if (s.nightStep) {
+        this.stepEl.textContent = NIGHT_STEP_NAME[s.nightStep];
+        this.stepEl.className = 'show';
+        const step = s.nightStep;
+        setTimeout(() => {
+          if (this.lastStep === step) this.stepEl.className = 'show dim';
+        }, 3000);
+      } else this.stepEl.className = '';
+    }
     const phaseKey = `${s.day}:${s.phase}`;
     if (phaseKey !== this.lastPhase) {
       this.lastPhase = phaseKey;
@@ -327,6 +372,56 @@ export class GameUI {
       clearInterval(this.clockTimer);
       this.showEnd(s);
     }
+  }
+
+  // ───────────────────────── scene choreography ─────────────────────────
+
+  private pendingExile = new Set<number>();
+  private wolvesShown: number[] = [];
+  private lastHowlStep: string | null = null;
+
+  /** Map engine state changes onto scene animation (howls, exiles). */
+  private choreograph(s: GameState) {
+    const stepKey = `${s.day}:${s.nightStep}`;
+    if (s.nightStep === 'wolves' && this.lastHowlStep !== stepKey) {
+      this.lastHowlStep = stepKey;
+      audio.howl(0.9, 0.4);
+      audio.howl(0.6, 1.6, 1.12);
+    }
+    if (this.pendingExile.size && s.phase !== 'vote' && s.phase !== 'lastWords') {
+      for (const id of this.pendingExile) this.stage.exiled(id);
+      this.pendingExile.clear();
+    }
+  }
+
+  /**
+   * The GM waits on these before moving on (e.g. the wolf turn ends only once
+   * the pack is back indoors). Capped so a hidden tab (paused rAF) never stalls the game.
+   */
+  cue(c: SceneCue): Promise<void> {
+    const iSeeWolves = this.game.players[this.me].role === 'werewolf' || this.godView;
+    let job: Promise<void> = Promise.resolve();
+    switch (c) {
+      case 'nightfall':
+        job = this.stage.nightFall();
+        break;
+      case 'dawn':
+        job = this.stage.dayBreak();
+        break;
+      case 'wolvesOut':
+        if (iSeeWolves) {
+          this.wolvesShown = this.game.wolves().filter((w) => w.alive).map((w) => w.id);
+          job = this.stage.wolvesOut(this.wolvesShown);
+        }
+        break;
+      case 'wolvesIn':
+        if (this.wolvesShown.length) {
+          job = this.stage.wolvesIn(this.wolvesShown);
+          this.wolvesShown = [];
+        }
+        break;
+    }
+    return Promise.race([job, new Promise<void>((r) => setTimeout(r, 12000))]);
   }
 
   // ───────────────────────── roster / role card ─────────────────────────
@@ -488,6 +583,7 @@ export class GameUI {
   // ───────────────────────── human decisions ─────────────────────────
 
   private open(...children: (Node | string | null)[]) {
+    audio.chime();
     this.action.replaceChildren(...children.filter((c): c is Node | string => c !== null));
     this.action.classList.add('show');
   }

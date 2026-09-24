@@ -384,3 +384,103 @@ export function cloudTexture(seed = 3): THREE.CanvasTexture {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+
+/**
+ * 24×30 werewolf in three-quarter profile facing right: long snout, tall
+ * pointed ears, shaggy mane, hunched back, bushy tail, digitigrade legs.
+ * Drawn from a character map so the silhouette stays clean.
+ */
+export function werewolfCanvas(seed: number): HTMLCanvasElement {
+  const furs: [string, string, string][] = [
+    ['#7a6a5a', '#4e4238', '#a08e78'],
+    ['#6e6258', '#443a34', '#948676'],
+    ['#6a6a72', '#40404a', '#90909a'],
+    ['#806650', '#523f30', '#a88a6c'],
+  ];
+  const [fur, dark, light] = furs[seed % furs.length];
+  // . empty  F fur  D dark fur  L light fur  E eye  N nose  T teeth  C claw  M mouth
+  const map = [
+    '........................',
+    '.......D.....D..........',
+    '.......DD...DF..........',
+    '.......DFD.DFF..........',
+    '.......DFFDFFF..........',
+    '......DFFFFFFFF.........',
+    '.....DFFFFFEFFFFF.......',
+    '.....DFFFFFFFFLLLLL.....',
+    '....DDFFFFFFFLLLLLLN....',
+    '....DFFFFFFFFMMMMMM.....',
+    '...DDFFFFFFFFTLTLTL.....',
+    '..DDFFFFFFFFFFLLLL......',
+    '.DDFFFFFFFFFFFLL........',
+    '.DFFFFFFFFFFFFFLF.......',
+    'DDFFFFFFFFFFFFFFFF......',
+    'DFFFFFLLLLFFFFFFFFD.....',
+    'DFFFFLLLLLLFFFDFFFFD....',
+    '.DFFFLLLLLLFFFD.DFFFD...',
+    '..DFFFLLLLFFFFD..DFFD...',
+    '...DFFFFFFFFFD....DFD...',
+    '....DFFFFFFFFD.....CCC..',
+    '....DFFFD.DFFD..........',
+    '....DFFD...DFFD.........',
+    '...DFFD.....DFFD........',
+    '...DFD.......DFD........',
+    '...DFFD.......DFD.......',
+    '....DFFD.......DFFD.....',
+    '.....DDD........DDD.....',
+    '....CCCC........CCCC....',
+    '........................',
+  ];
+  const H = map.length;
+  const W = map[0].length;
+  const [c, ctx] = canvas(W, H);
+  const col: Record<string, string> = { F: fur, D: dark, L: light, E: '#ffd23a', N: '#141010', T: '#f0e8d8', C: '#e0d6c4', M: '#3a1414' };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const ch = map[y][x];
+    if (ch === '.') continue;
+    ctx.fillStyle = col[ch];
+    ctx.fillRect(x, y, 1, 1);
+  }
+  // bushy tail curling behind the back
+  ctx.fillStyle = dark;
+  for (const [x, y] of [[0, 17], [0, 18], [1, 19], [1, 20], [2, 21], [0, 19], [0, 20], [1, 21]]) ctx.fillRect(x, y, 1, 1);
+  // a few fur tufts for texture (deterministic per wolf)
+  const rng = new Rng(seed * 31 + 7);
+  ctx.fillStyle = dark;
+  for (let k = 0; k < 8; k++) {
+    const x = 4 + rng.int(12), y = 12 + rng.int(8);
+    if (map[y][x] === 'F') ctx.fillRect(x, y, 1, 1);
+  }
+  outline(ctx, W, H, '#0c0808');
+  // glowing eye stays bright over the outline
+  ctx.fillStyle = '#ffd23a';
+  ctx.fillRect(11, 6, 1, 1);
+  return c;
+}
+
+export function batFrames(): HTMLCanvasElement[] {
+  const frames: HTMLCanvasElement[] = [];
+  for (let f = 0; f < 2; f++) {
+    const [c, ctx] = canvas(14, 8);
+    ctx.fillStyle = '#18141c';
+    ctx.fillRect(6, 3, 2, 3); // body
+    ctx.fillRect(6, 2, 1, 1);
+    ctx.fillRect(7, 2, 1, 1);
+    if (f === 0) {
+      ctx.fillRect(1, 1, 5, 2);
+      ctx.fillRect(8, 1, 5, 2);
+      ctx.fillRect(0, 0, 2, 1);
+      ctx.fillRect(12, 0, 2, 1);
+    } else {
+      ctx.fillRect(2, 4, 4, 2);
+      ctx.fillRect(8, 4, 4, 2);
+      ctx.fillRect(1, 6, 2, 1);
+      ctx.fillRect(11, 6, 2, 1);
+    }
+    ctx.fillStyle = '#c03030';
+    ctx.fillRect(6, 3, 1, 1);
+    ctx.fillRect(7, 3, 1, 1);
+    frames.push(c);
+  }
+  return frames;
+}

@@ -7,6 +7,7 @@ import { Game, GameAborted } from './game/game';
 import { Rng } from './game/rng';
 import type { Agent } from './game/types';
 import { Stage } from './render/stage';
+import { audio } from './audio/audio';
 import { h } from './ui/dom';
 import { GameUI } from './ui/hud';
 import { showRules } from './ui/rules';
@@ -15,6 +16,17 @@ import { showSetup, type Settings } from './ui/setup';
 const app = document.getElementById('app')!;
 const labels = document.getElementById('labels')!;
 const stage = new Stage(document.getElementById('stage')!);
+if (import.meta.env.DEV) (window as unknown as { __stage: Stage }).__stage = stage; // debugging hook
+stage.sounds = {
+  doorOpen: (v) => audio.doorOpen(v),
+  doorClose: (v) => audio.doorClose(v),
+  doorBreak: (v) => audio.doorBreak(v),
+  seal: (v) => audio.seal(v),
+  squeak: (v) => audio.squeak(v),
+  flap: (v) => audio.batFlap(v),
+  caw: (v) => audio.caw(v),
+  thunder: (d) => audio.thunder(d),
+};
 
 function toast(text: string) {
   const el = h('div', { class: 'toast panel' }, text);
@@ -40,6 +52,7 @@ async function play(settings: Settings) {
     {
       onEvent: (e) => ui?.onEvent(e),
       onState: (s) => ui?.onState(s),
+      cue: (c) => ui?.cue(c) ?? Promise.resolve(),
     },
   );
 
@@ -78,6 +91,7 @@ async function play(settings: Settings) {
 async function main() {
   while (true) {
     const settings = await showSetup(app, () => showRules(app));
+    audio.start(); // "开始游戏" click is the user gesture that unlocks audio
     await play(settings);
   }
 }

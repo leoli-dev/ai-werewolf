@@ -6,8 +6,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Animals } from './animals';
 import { Atmosphere } from './atmosphere';
-import { characterCanvas, graveCanvas, paletteFor, pixelTexture } from './pixel';
-import { billboardSprite, buildTown, seatPosition, type TownRefs } from './town';
+import { characterCanvas, graveCanvas, paletteFor, pixelTexture, werewolfCanvas } from './pixel';
+import { EXIT_PATH, billboardSprite, buildTown, seatAngle, seatPosition, type HouseRefs, type TownRefs } from './town';
 
 /** Separable tilt-shift blur: sharp band around `focus` (0..1 screen y), blur grows away from it. */
 const TiltShift = (dir: [number, number]) => ({
@@ -71,11 +71,39 @@ const GradeShader = {
 interface Actor {
   id: number;
   sprite: THREE.Mesh;
+  /** Werewolf form, only ever shown to wolves (or god view) during the wolf turn. */
+  wolf: THREE.Mesh;
   grave: THREE.Mesh;
+  /** Standing spot on the plaza ring. */
   base: THREE.Vector3;
-  alive: boolean;
+  /** Where the wolves gather in the plaza. */
+  den: THREE.Vector3;
+  status: 'alive' | 'dead' | 'exiled';
+  /** Bumped by every new command; running sequences stop when it changes. */
+  gen: number;
   phase: number;
 }
+
+/** Scene sounds, positioned by the stage (volume falls off with distance). */
+export interface StageSounds {
+  doorOpen(vol: number): void;
+  doorClose(vol: number): void;
+  doorBreak(vol: number): void;
+  seal(vol: number): void;
+  squeak(vol: number): void;
+  flap(vol: number): void;
+  caw(vol: number): void;
+  thunder(distance: number): void;
+}
+
+interface Tween {
+  t: number;
+  dur: number;
+  fn: (k: number) => void;
+  resolve: () => void;
+}
+
+const WALK_SPEED = 2.6;
 
 export interface ScreenPos {
   x: number;
@@ -112,6 +140,7 @@ export class Stage {
 
   onFrame?: (positions: ScreenPos[]) => void;
   onPick?: (id: number) => void;
+  sounds?: StageSounds;
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -133,21 +162,26 @@ export class Stage {
 
     for (let i = 0; i < 12; i++) {
       const tex = pixelTexture(characterCanvas(paletteFor(i)));
-      const sprite = billboardSprite(tex, 1.25, 1.875);
-      const sm = sprite.material as THREE.MeshStandardMaterial;
-      sm.emissiveMap = tex;
-      sm.emissive = new THREE.Color(0xffffff);
-      sm.emissiveIntensity = 0.15;
+      const sprite = this.selfLit(billboardSprite(tex, 1.25, 1.875), tex);
       const base = seatPosition(i);
       sprite.position.copy(base);
-      sprite.userData.seat = i;
+      const wtex = pixelTexture(werewolfCanvas(i));
+      const wolf = this.selfLit(billboardSprite(wtex, 1.9, 2.375), wtex);
+      wolf.visible = false;
       const grave = billboardSprite(pixelTexture(graveCanvas('cross', i)), 0.8, 1.05);
       grave.position.copy(base);
       grave.visible = false;
-      this.scene.add(sprite, grave);
-      this.billboards.push(sprite, grave);
-      this.actors.push({ id: i, sprite, grave, base, alive: true, phase: i * 0.7 });
+      const da = seatAngle(i);
+      const den = new THREE.Vector3(Math.cos(da) * 4.6, 0, Math.sin(da) * 4.6);
+      this.scene.add(sprite, wolf, grave);
+      this.billboards.push(sprite, wolf, grave);
+      this.actors.push({ id: i, sprite, wolf, grave, base, den, status: 'alive', gen: 0, phase: i * 0.7 });
     }
+
+    this.animals.onSqueak = (p) => this.sounds?.squeak(this.falloff(p));
+    this.animals.onFlap = (p) => this.sounds?.flap(this.falloff(p));
+    this.animals.onCaw = (p) => this.sounds?.caw(this.falloff(p) * 0.7);
+    this.atmo.onStrike = (d) => this.sounds?.thunder(d);
 
     this.focusRing = new THREE.Mesh(
       new THREE.RingGeometry(0.55, 0.75, 24),
@@ -188,17 +222,217 @@ export class Stage {
     this.focusId = id;
   }
 
-  setAlive(id: number, alive: boolean) {
+  // ── choreography ──
+
+  /** 天黑请闭眼: everyone still standing walks home and shuts the door. */
+  nightFall(): Promise<void> {
+    const jobs: Promise<void>[] = [];
+    for (const a of this.actors) {
+      if (a.status !== 'alive') continue;
+      const gen = ++a.gen;
+      jobs.push(this.goInside(a, gen, a.sprite, Math.random() * 1.4));
+    }
+    return Promise.all(jobs).then(() => {});
+  }
+
+  /** Dawn: survivors open their doors and walk back to the plaza. */
+  dayBreak(): Promise<void> {
+    const jobs: Promise<void>[] = [];
+    for (const a of this.actors) {
+      if (a.status !== 'alive') continue;
+      const gen = ++a.gen;
+      jobs.push(this.comeOutside(a, gen, a.sprite, a.base, 0.4 + Math.random() * 1.4));
+    }
+    return Promise.all(jobs).then(() => {});
+  }
+
+  /** Wolf turn, seen only by wolves: they step out in werewolf form. */
+  wolvesOut(ids: number[]): Promise<void> {
+    const jobs: Promise<void>[] = [];
+    for (const id of ids) {
+      const a = this.actors[id];
+      if (a.status !== 'alive') continue;
+      const gen = ++a.gen;
+      a.sprite.visible = false;
+      jobs.push(this.comeOutside(a, gen, a.wolf, a.den, Math.random() * 0.8));
+    }
+    return Promise.all(jobs).then(() => {});
+  }
+
+  wolvesIn(ids: number[]): Promise<void> {
+    const jobs: Promise<void>[] = [];
+    for (const id of ids) {
+      const a = this.actors[id];
+      if (!a.wolf.visible) continue;
+      const gen = ++a.gen;
+      jobs.push(this.goInside(a, gen, a.wolf, Math.random() * 0.6));
+    }
+    return Promise.all(jobs).then(() => {});
+  }
+
+  /** Killed (night kill, poison, hunter shot): a grave takes their place, their door is smashed. */
+  killed(id: number) {
     const a = this.actors[id];
-    if (a.alive === alive) return;
-    a.alive = alive;
-    a.sprite.visible = alive;
-    a.grave.visible = !alive;
+    if (a.status !== 'alive') return;
+    a.status = 'dead';
+    a.gen++;
+    a.sprite.visible = false;
+    a.wolf.visible = false;
+    a.grave.visible = true;
+    const h = this.town.houses[id];
+    h.lit = false;
+    h.state = 'broken';
+    h.debris.visible = true;
+    h.doorPivot.visible = false; // torn off: it now lies on the ground (part of debris)
+    this.sounds?.doorBreak(this.falloff(h.doorstep));
+  }
+
+  /** Exiled by vote: they walk out of town along the path; their house goes dark and is sealed. No grave. */
+  exiled(id: number) {
+    const a = this.actors[id];
+    if (a.status !== 'alive') return;
+    a.status = 'exiled';
+    const gen = ++a.gen;
+    const h = this.town.houses[id];
+    void (async () => {
+      h.lit = false;
+      h.state = 'sealed';
+      await this.wait(0.6);
+      h.seal.visible = true;
+      this.sounds?.seal(this.falloff(h.doorstep));
+      if (!a.sprite.visible) return;
+      // join the path at its nearest point, then follow it out
+      const start = EXIT_PATH.reduce((best, p, k) => (p.distanceTo(a.sprite.position) < EXIT_PATH[best].distanceTo(a.sprite.position) ? k : best), 0);
+      for (const p of EXIT_PATH.slice(start)) {
+        await this.walk(a.sprite, p, () => a.gen === gen, 1.8);
+        if (a.gen !== gen) return;
+      }
+      a.sprite.visible = false;
+    })();
   }
 
   resetAll() {
-    for (const a of this.actors) this.setAlive(a.id, true);
+    for (const a of this.actors) {
+      a.status = 'alive';
+      a.gen++;
+      a.sprite.visible = true;
+      a.sprite.position.copy(a.base);
+      a.wolf.visible = false;
+      a.grave.visible = false;
+    }
+    for (const h of this.town.houses) {
+      h.lit = true;
+      h.state = 'normal';
+      h.seal.visible = false;
+      h.debris.visible = false;
+      h.doorPivot.visible = true;
+      h.doorPivot.rotation.set(0, 0, 0);
+    }
     this.focus(null);
+  }
+
+  /** World position that labels / focus should follow, or null if hidden indoors. */
+  private anchor(a: Actor): THREE.Vector3 | null {
+    if (a.wolf.visible) return a.wolf.position;
+    if (a.sprite.visible) return a.sprite.position;
+    if (a.status === 'dead') return a.grave.position;
+    return null;
+  }
+
+  private async goInside(a: Actor, gen: number, body: THREE.Mesh, delay: number) {
+    const h = this.town.houses[a.id];
+    await this.wait(delay);
+    if (a.gen !== gen || !body.visible) return;
+    await this.walk(body, h.doorstep, () => a.gen === gen);
+    if (a.gen !== gen) return;
+    await this.swingDoor(h, true);
+    await this.walk(body, h.inside, () => a.gen === gen);
+    body.visible = false;
+    await this.swingDoor(h, false);
+  }
+
+  private async comeOutside(a: Actor, gen: number, body: THREE.Mesh, dest: THREE.Vector3, delay: number) {
+    const h = this.town.houses[a.id];
+    await this.wait(delay);
+    if (a.gen !== gen || a.status !== 'alive') return;
+    if (body.visible) {
+      await this.walk(body, dest, () => a.gen === gen);
+      return;
+    }
+    await this.swingDoor(h, true);
+    if (a.gen !== gen) return;
+    body.position.copy(h.inside);
+    body.visible = true;
+    await this.walk(body, h.doorstep, () => a.gen === gen);
+    void this.swingDoor(h, false);
+    await this.walk(body, dest, () => a.gen === gen);
+  }
+
+  private async swingDoor(h: HouseRefs, open: boolean) {
+    if (h.state !== 'normal') return;
+    const from = h.doorPivot.rotation.y;
+    const to = open ? 1.45 : 0;
+    if (open) this.sounds?.doorOpen(this.falloff(h.doorstep));
+    await this.tween(open ? 0.55 : 0.4, (k) => this.setDoor(h, from + (to - from) * (open ? k : k * k)));
+    if (!open) this.sounds?.doorClose(this.falloff(h.doorstep));
+  }
+
+  private setDoor(h: HouseRefs, angle: number) {
+    h.doorPivot.rotation.y = angle;
+  }
+
+  /** Walk `body` to `to` with a stepping bob; stops early if `alive()` turns false. */
+  private walk(body: THREE.Mesh, to: THREE.Vector3, alive: () => boolean, speed = WALK_SPEED): Promise<void> {
+    const from = body.position.clone().setY(0);
+    const dist = from.distanceTo(to);
+    if (dist < 0.05) return Promise.resolve();
+    const dir = to.clone().sub(from);
+    return this.tween(dist / speed, (k) => {
+      if (!alive()) return;
+      body.position.lerpVectors(from, to, k);
+      body.position.y = Math.abs(Math.sin(k * dist * 3.2)) * 0.09;
+      const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+      body.scale.x = dir.dot(right) >= 0 ? 1 : -1;
+    }).then(() => {
+      if (alive()) body.position.y = 0;
+    });
+  }
+
+  private tweens: Tween[] = [];
+
+  private tween(dur: number, fn: (k: number) => void): Promise<void> {
+    return new Promise((resolve) => this.tweens.push({ t: 0, dur: Math.max(dur, 0.001), fn, resolve }));
+  }
+
+  private wait(sec: number) {
+    return this.tween(sec, () => {});
+  }
+
+  private stepTweens(dt: number) {
+    const done: Tween[] = [];
+    for (const tw of this.tweens) {
+      tw.t += dt;
+      const k = Math.min(1, tw.t / tw.dur);
+      tw.fn(k);
+      if (k >= 1) done.push(tw);
+    }
+    if (done.length) {
+      this.tweens = this.tweens.filter((x) => !done.includes(x));
+      for (const d of done) d.resolve();
+    }
+  }
+
+  /** 1 near the camera focus, fading with distance. */
+  private falloff(p: THREE.Vector3): number {
+    return THREE.MathUtils.clamp(1.2 - p.distanceTo(this.camTarget) / 45, 0.45, 1);
+  }
+
+  private selfLit(m: THREE.Mesh, tex: THREE.Texture): THREE.Mesh {
+    const sm = m.material as THREE.MeshStandardMaterial;
+    sm.emissiveMap = tex;
+    sm.emissive = new THREE.Color(0xffffff);
+    sm.emissiveIntensity = 0.15;
+    return m;
   }
 
   /** Tint the human's own character slightly so they can find themselves. */
@@ -251,9 +485,9 @@ export class Stage {
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
-    const hits = ray.intersectObjects(this.actors.flatMap((a) => [a.sprite, a.grave]).filter((m) => m.visible), false);
+    const hits = ray.intersectObjects(this.actors.flatMap((a) => [a.sprite, a.wolf, a.grave]).filter((m) => m.visible), false);
     if (hits.length) {
-      const id = this.actors.find((a) => a.sprite === hits[0].object || a.grave === hits[0].object)!.id;
+      const id = this.actors.find((a) => [a.sprite, a.wolf, a.grave].includes(hits[0].object as THREE.Mesh))!.id;
       this.onPick?.(id);
     }
   }
@@ -279,7 +513,12 @@ export class Stage {
     this.atmo.mix += (this.nightTarget - this.atmo.mix) * Math.min(1, dt * 0.8);
     const n = this.atmo.mix;
     this.atmo.update(dt, t);
+    this.stepTweens(dt);
     for (const w of this.town.windows) w.emissiveIntensity = THREE.MathUtils.lerp(0.15, 2.2, n);
+    for (const h of this.town.houses) {
+      const glow = h.lit ? THREE.MathUtils.lerp(0.15, 2.2, n) : 0;
+      for (const w of h.windows) w.emissiveIntensity += (glow - w.emissiveIntensity) * Math.min(1, dt * 2);
+    }
     this.town.lanterns.forEach((l, i) => {
       const flicker = 0.85 + Math.sin(t * 9 + i * 3) * 0.08 + Math.sin(t * 23 + i) * 0.06;
       l.intensity = THREE.MathUtils.lerp(4, 22, n) * flicker;
@@ -290,17 +529,20 @@ export class Stage {
 
     // characters: idle breathing; sprites stay readable at night (HD-2D style self-lit sprites)
     for (const a of this.actors) {
-      if (!a.alive) continue;
-      const sm = a.sprite.material as THREE.MeshStandardMaterial;
-      sm.emissiveIntensity = THREE.MathUtils.lerp(0.12, 0.4, n) + (a.id === this.selfId ? 0.12 : 0);
-      const speaking = this.focusId === a.id;
-      const bob = Math.sin(t * (speaking ? 7 : 2) + a.phase);
-      a.sprite.scale.y = 1 + bob * (speaking ? 0.035 : 0.015);
-      a.sprite.position.y = speaking ? Math.max(0, bob) * 0.05 : 0;
+      for (const body of [a.sprite, a.wolf]) {
+        if (!body.visible) continue;
+        const sm = body.material as THREE.MeshStandardMaterial;
+        sm.emissiveIntensity = THREE.MathUtils.lerp(0.12, 0.4, n) + (a.id === this.selfId ? 0.12 : 0) + (body === a.wolf ? 0.1 : 0);
+        const speaking = this.focusId === a.id;
+        const bob = Math.sin(t * (speaking ? 7 : 2) + a.phase);
+        body.scale.y = 1 + bob * (speaking ? 0.035 : body === a.wolf ? 0.03 : 0.015);
+      }
     }
 
     // camera
-    const focused = this.focusId !== null ? this.actors[this.focusId] : null;
+    const focusedActor = this.focusId !== null ? this.actors[this.focusId] : null;
+    const focusPos = focusedActor ? this.anchor(focusedActor) : null;
+    const focused = focusPos ? { base: focusPos.clone().setY(0) } : null;
     const tgt = focused ? focused.base.clone().setY(1.2).multiplyScalar(0.8) : new THREE.Vector3(0, 1, 0);
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
     const dist = (focused ? 26 : 40) * this.userZoom;
@@ -336,7 +578,7 @@ export class Stage {
       b.rotation.y = Math.atan2(this.camera.position.x - wp.x, this.camera.position.z - wp.z) - parentRot;
     }
 
-    this.animals.update(t, this.camera);
+    this.animals.update(t, this.camera, n);
 
     // post
     const ft = this.camTarget.clone().project(this.camera);
@@ -356,7 +598,10 @@ export class Stage {
     if (this.onFrame) {
       const rect = this.renderer.domElement.getBoundingClientRect();
       const out: ScreenPos[] = this.actors.map((a) => {
-        const p = a.base.clone().setY(a.alive ? 2.25 : 1.3).project(this.camera);
+        const anchor = this.anchor(a);
+        if (!anchor) return { x: 0, y: 0, visible: false };
+        const height = a.wolf.visible ? 2.7 : a.status === 'dead' ? 1.3 : 2.25;
+        const p = anchor.clone().setY(height).project(this.camera);
         return {
           x: rect.left + ((p.x + 1) / 2) * rect.width,
           y: rect.top + ((1 - p.y) / 2) * rect.height,

@@ -21,6 +21,8 @@ export class Atmosphere {
   private strikePattern: number[] = [];
   /** 0..1 current lightning brightness (read by post-processing). */
   lightning = 0;
+  /** Fired when a lightning strike starts; arg = 0 (close) … 1 (far), for thunder delay. */
+  onStrike?: (distance: number) => void;
   mix = 0;
 
   constructor(scene: THREE.Scene) {
@@ -110,6 +112,7 @@ export class Atmosphere {
         this.strikeT = 0;
         this.strikePattern = Math.random() < 0.5 ? [0, 0.12, 0.26] : [0, 0.09];
         this.nextStrike = 5 + Math.random() * 9;
+        this.onStrike?.(Math.random());
       }
     }
     this.lightning = 0;

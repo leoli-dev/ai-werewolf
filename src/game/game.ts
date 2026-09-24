@@ -46,11 +46,20 @@ export interface GameState {
   lastGuarded: number | null;
   /** Seer knowledge: target -> exact role (only results that survived dawn). */
   seerChecks: Record<number, Role>;
+  /** Which night role is currently awake (public knowledge, drives scene/audio). */
+  nightStep: NightStep | null;
 }
+
+export type NightStep = 'seer' | 'guard' | 'wolves' | 'hunter' | 'witch';
+
+/** Moments where the GM waits for the scene to finish animating. */
+export type SceneCue = 'nightfall' | 'wolvesOut' | 'wolvesIn' | 'dawn';
 
 export interface GameHooks {
   onEvent?(e: GameEvent): void;
   onState?(s: GameState): void;
+  /** Resolve when the scene has played the cue (e.g. every wolf is back indoors). */
+  cue?(c: SceneCue): Promise<void>;
 }
 
 export class GameAborted extends Error {}
@@ -88,6 +97,7 @@ export class Game {
       hunterShot: false,
       lastGuarded: null,
       seerChecks: {},
+      nightStep: null,
     };
   }
 
@@ -192,6 +202,21 @@ export class Game {
     this.publish();
   }
 
+  private announceStep(step: NightStep, text: string) {
+    this.setNightStep(step);
+    this.gm(text);
+  }
+
+  /** A turn whose role is dead / has nothing to do: wait a plausible while. */
+  private async idleTurn() {
+    await this.pace(2 + this.rng.next() * 3);
+  }
+
+  private setNightStep(step: NightStep | null) {
+    this.state.nightStep = step;
+    this.publish();
+  }
+
   private setActor(id: number | null, label = '') {
     this.state.actor = id;
     this.state.actorLabel = label;
@@ -201,6 +226,12 @@ export class Game {
   private async pace(mult = 1) {
     this.guard();
     if (this.paceMs > 0) await sleep(this.paceMs * mult);
+    this.guard();
+  }
+
+  private async cue(c: SceneCue) {
+    this.guard();
+    if (this.hooks.cue) await this.hooks.cue(c);
     this.guard();
   }
 
@@ -289,6 +320,7 @@ export class Game {
     this.setPhase('night');
     const day = this.state.day;
     this.gm(`第 ${day} 夜，天黑请闭眼。`);
+    await this.cue('nightfall');
     await this.pace(2);
 
     const pending = new Map<number, DeathCause>();
@@ -297,8 +329,10 @@ export class Game {
     // 1. 预言家
     const seer = this.byRole('seer');
     let seerResult: { target: number; role: Role } | null = null;
-    if (seer?.alive) {
-      this.gm('预言家请睁眼，请选择要查验的玩家。');
+    // every turn is announced every night, even if that role is gone (no information leak)
+    this.announceStep('seer', '预言家请睁眼，请选择要查验的玩家。');
+    if (!seer?.alive) await this.idleTurn();
+    else {
       const cands = alive.filter((i) => i !== seer.id && !(i in this.state.seerChecks));
       const target = await this.askTarget(seer.id, 'seer', cands.length ? cands : alive.filter((i) => i !== seer.id), false, '选择今晚要查验的玩家。', '预言家查验中');
       if (target !== null) {
@@ -311,8 +345,9 @@ export class Game {
     // 2. 守卫
     const guardP = this.byRole('guard');
     let guarded: number | null = null;
-    if (guardP?.alive) {
-      this.gm('守卫请睁眼，请选择要守护的玩家。');
+    this.announceStep('guard', '守卫请睁眼，请选择要守护的玩家。');
+    if (!guardP?.alive) await this.idleTurn();
+    else {
       const cands = alive.filter((i) => i !== guardP.id && i !== this.state.lastGuarded);
       guarded = await this.askTarget(guardP.id, 'guard', cands, true, `不能守护自己，不能连续守护同一人（上一晚守护：${this.state.lastGuarded === null ? '无' : seat(this.state.lastGuarded)}）。可以空守。`, '守卫守护中');
       this.gm(guarded === null ? '你今晚选择空守。' : `你今晚守护了 ${seat(guarded)}。`, [guardP.id]);
@@ -322,12 +357,14 @@ export class Game {
 
     // 3. 狼群
     const wolfKill = await this.wolfTurn();
+    this.setNightStep(null);
     if (wolfKill !== null && wolfKill !== guarded) pending.set(wolfKill, 'wolf');
 
     // 4. 猎人（任意时机可开一枪；夜晚轮次询问）
     const hunter = this.byRole('hunter');
-    if (hunter?.alive && !this.state.hunterShot && !pending.has(hunter.id)) {
-      this.gm('猎人请睁眼，是否要开枪？');
+    this.announceStep('hunter', '猎人请睁眼，是否要开枪？');
+    if (!(hunter?.alive && !this.state.hunterShot && !pending.has(hunter.id))) await this.idleTurn();
+    else {
       const cands = this.aliveIds().filter((i) => i !== hunter.id);
       const shot = await this.askTarget(hunter.id, 'hunterShot', cands, true, '你可以现在开枪带走一名玩家（整局仅一发），也可以不开。', '猎人决定中');
       if (shot !== null) {
@@ -340,8 +377,9 @@ export class Game {
 
     // 5. 女巫（若已在今夜被杀则轮次作废）
     const witch = this.byRole('witch');
-    if (witch?.alive && !pending.has(witch.id)) {
-      this.gm('女巫请睁眼。');
+    this.announceStep('witch', '女巫请睁眼。');
+    if (!(witch?.alive && !pending.has(witch.id))) await this.idleTurn();
+    else {
       const w = this.state.witch;
       if (w.hasAntidote && pending.size > 0) {
         const dead = [...pending.keys()].sort((a, b) => a - b);
@@ -367,6 +405,7 @@ export class Game {
     }
 
     // 天亮结算
+    this.setNightStep(null);
     this.setPhase('dawn');
     const deaths = [...pending.keys()].sort((a, b) => a - b);
     if (seer && seerResult && !pending.has(seer.id) && seer.alive) {
@@ -375,6 +414,7 @@ export class Game {
     }
     this.gm(`天亮了。${deaths.length ? `昨晚死亡的玩家：${deaths.map((i) => `${seat(i)} ${this.players[i].name}`).join('、')}。` : '昨晚是平安夜。'}`);
     for (const id of deaths) this.kill(id, pending.get(id)!);
+    await this.cue('dawn');
     this.nightDeaths = deaths;
     await this.pace(2);
   }
@@ -387,18 +427,24 @@ export class Game {
     if (!wolves.length) return null;
     const ids = wolves.map((w) => w.id);
     const channel: Visibility = { kind: 'private', to: ids };
-    this.emit('gm', '狼人请睁眼，请商量今晚的目标。', { kind: 'public' });
+    this.announceStep('wolves', '狼人请睁眼，请商量今晚的目标。');
+    await this.cue('wolvesOut');
     const day = this.state.day;
     if (wolves.length > 1) {
       for (let round = 1; round <= this.wolfChatRounds; round++) {
+        // from round 2 the human (if a wolf) speaks last, and only if a teammate still had something to add
+        const order = round === 1 ? wolves : [...wolves.filter((w) => !w.isHuman), ...wolves.filter((w) => w.isHuman)];
         let passes = 0;
-        for (const w of wolves) {
+        let spoken = 0;
+        for (const w of order) {
+          if (round > 1 && w.isHuman && passes === spoken) break;
           const text = (await this.ask(w.id, { kind: 'wolfChat', round, rounds: this.wolfChatRounds, day }, `狼队沟通 ${round}/${this.wolfChatRounds}`)) as string;
           const bare = isPass(text);
+          spoken++;
           if (bare || /^\s*(pass|过)/i.test(text) || (text.length <= 30 && /没有?补充|没意见|pass/i.test(text))) passes++;
           this.emit('wolfChat', bare ? '（没有补充）' : text, channel, { speaker: w.id, data: this.lastSpeechFallback ? { fallback: true } : undefined });
         }
-        if (passes === wolves.length) break;
+        if (passes === spoken) break; // nobody had anything to add: go straight to the vote
       }
     }
     const cands = this.aliveIds();
@@ -419,6 +465,8 @@ export class Game {
       target = this.rng.pick([...tally.keys()]);
       this.emit('wolfChat', `狼队投票：${detail}。未过半数，系统随机选定 ${seat(target)}。`, channel);
     }
+    // the wolf turn only ends once the pack is fully back indoors
+    await this.cue('wolvesIn');
     await this.pace();
     return target;
   }
