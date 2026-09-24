@@ -90,6 +90,8 @@ export interface WolfChatRequest {
   round: number;
   rounds: number;
   day: number;
+  /** Round ≥ 2 and every teammate before you had nothing to add. */
+  othersPassed?: boolean;
 }
 
 export interface TargetRequest {

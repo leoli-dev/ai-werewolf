@@ -602,7 +602,9 @@ export class GameUI {
           : { discussion: '轮到你发言', summary: '归纳总结（首位发言人）', lastWords: '你的遗言', defense: '平票正名' }[req.purpose];
       const hint =
         req.kind === 'wolfChat'
-          ? '只有狼队友能看到。和队友商量刀谁、白天怎么配合；没有补充可直接点「过」。'
+          ? req.othersPassed
+            ? '队友们都表示没有补充。你还想说什么就写下来，队友会在下一轮回应；否则直接开始投票。'
+            : '只有狼队友能看到。和队友商量刀谁、白天怎么配合；没有补充可直接点「过」。'
           : req.purpose === 'summary'
             ? '所有人都已发言。梳理大家的站边与矛盾，给出建议的放逐对象。'
             : '在这里输入你想对全镇说的话。可以提到「N号」。';
@@ -624,8 +626,15 @@ export class GameUI {
           'div',
           { class: 'row' },
           count,
-          h('button', { class: 'btn', onclick: () => done(req.kind === 'wolfChat' ? 'pass' : '过。') }, '过'),
-          h('button', { class: 'btn primary', onclick: () => ta.value.trim() && done(ta.value.trim()) }, '发言 (⌘↵)'),
+          ...(req.kind === 'wolfChat' && req.othersPassed
+            ? [
+                h('button', { class: 'btn', onclick: () => ta.value.trim() && done(ta.value.trim()) }, '补充 (⌘↵)'),
+                h('button', { class: 'btn primary', onclick: () => done('pass') }, '没有补充，开始投票'),
+              ]
+            : [
+                h('button', { class: 'btn', onclick: () => done(req.kind === 'wolfChat' ? 'pass' : '过。') }, '过'),
+                h('button', { class: 'btn primary', onclick: () => ta.value.trim() && done(ta.value.trim()) }, '发言 (⌘↵)'),
+              ]),
         ),
       );
       setTimeout(() => ta.focus(), 50);

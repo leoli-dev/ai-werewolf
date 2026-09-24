@@ -432,13 +432,14 @@ export class Game {
     const day = this.state.day;
     if (wolves.length > 1) {
       for (let round = 1; round <= this.wolfChatRounds; round++) {
-        // from round 2 the human (if a wolf) speaks last, and only if a teammate still had something to add
+        // from round 2 the human (if a wolf) speaks last, after seeing what the AI wolves added;
+        // if they all passed the human gets a one-click "no addition, vote now"
         const order = round === 1 ? wolves : [...wolves.filter((w) => !w.isHuman), ...wolves.filter((w) => w.isHuman)];
         let passes = 0;
         let spoken = 0;
         for (const w of order) {
-          if (round > 1 && w.isHuman && passes === spoken) break;
-          const text = (await this.ask(w.id, { kind: 'wolfChat', round, rounds: this.wolfChatRounds, day }, `狼队沟通 ${round}/${this.wolfChatRounds}`)) as string;
+          const othersPassed = round > 1 && spoken > 0 && passes === spoken;
+          const text = (await this.ask(w.id, { kind: 'wolfChat', round, rounds: this.wolfChatRounds, day, othersPassed }, `狼队沟通 ${round}/${this.wolfChatRounds}`)) as string;
           const bare = isPass(text);
           spoken++;
           if (bare || /^\s*(pass|过)/i.test(text) || (text.length <= 30 && /没有?补充|没意见|pass/i.test(text))) passes++;
