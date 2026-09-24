@@ -12,7 +12,7 @@ import {
   type TargetRequest,
   type WolfChatRequest,
 } from '../game/types';
-import { characterCanvas, paletteFor } from '../render/pixel';
+import { characterCanvas, type Look } from '../render/pixel';
 import type { ScreenPos, Stage } from '../render/stage';
 import { audio } from '../audio/audio';
 import { h } from './dom';
@@ -83,6 +83,7 @@ export class GameUI {
     private me: number,
     private godView: boolean,
     private onRestart: () => void,
+    private looks: Look[],
   ) {
     this.build();
     this.agent = {
@@ -127,7 +128,7 @@ export class GameUI {
 
   private build() {
     const me = this.game.players[this.me];
-    const portrait = characterCanvas(paletteFor(this.me));
+    const portrait = characterCanvas(this.looks[this.me]);
     portrait.style.width = '64px';
     portrait.style.height = '96px';
     this.roleCard = h('div', { class: 'role-card panel' });

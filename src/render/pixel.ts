@@ -174,87 +174,165 @@ export function surface(kind: Material, seed = 1): THREE.CanvasTexture {
 
 // ───────────────────────── characters ─────────────────────────
 
-export interface Palette {
+/** A character's outfit. Each persona has a fixed look that matches their trade. */
+export interface Look {
   skin: string;
   hair: string;
-  cloak: string;
-  cloakDark: string;
-  shirt: string;
+  hairStyle: 'short' | 'long' | 'bun' | 'braid' | 'bald';
+  beard: 'none' | 'full' | 'mustache' | 'stubble';
+  beardColor?: string;
+  head: 'none' | 'hood' | 'wimple' | 'strawHat' | 'featherCap' | 'helmet' | 'cap';
+  headColor?: string;
+  body: 'tunic' | 'dress' | 'habit' | 'apron' | 'armor' | 'robe' | 'cloak';
+  main: string;
+  dark: string;
+  accent: string;
   pants: string;
-  hood: boolean;
-  beard: boolean;
-  hat: boolean;
 }
 
-const SKINS = ['#e0b48f', '#c99873', '#a8775a', '#e8c3a2', '#8d5f45'];
-const HAIRS = ['#2b1d14', '#5a3a22', '#8a6a3a', '#bdb6a8', '#1a1a1e', '#7a3a1e'];
-const CLOAKS: [string, string][] = [
-  ['#5c3a2e', '#3b241c'], ['#34464f', '#222e35'], ['#4b5233', '#303521'], ['#5b4a6b', '#3b2f47'],
-  ['#6b5a3a', '#463a24'], ['#743434', '#4a2020'], ['#3b3b44', '#25252c'], ['#2f4a3a', '#1e3026'],
-  ['#6a5a4a', '#46392e'], ['#4a3f5c', '#2f283c'], ['#7a6040', '#503e28'], ['#3a4a5c', '#26313d'],
-];
-
-export function paletteFor(i: number): Palette {
-  const rng = new Rng(i * 131 + 7);
-  const [cloak, cloakDark] = CLOAKS[i % CLOAKS.length];
-  return {
-    skin: rng.pick(SKINS),
-    hair: rng.pick(HAIRS),
-    cloak,
-    cloakDark,
-    shirt: rng.pick(['#9a8a6a', '#7a7466', '#b0a080', '#6a5c4c']),
-    pants: rng.pick(['#3a3028', '#2c2a2e', '#4a3c2c']),
-    hood: rng.next() < 0.4,
-    beard: rng.next() < 0.35,
-    hat: rng.next() < 0.25,
-  };
-}
-
-/** 16×24 villager sprite with 1px dark outline. */
-export function characterCanvas(p: Palette): HTMLCanvasElement {
+/** 16×24 villager sprite built from a Look, with a 1px dark outline. */
+export function characterCanvas(l: Look): HTMLCanvasElement {
   const W = 16, H = 24;
   const [c, ctx] = canvas(W, H);
   const r = (x: number, y: number, w: number, h: number, col: string) => {
     ctx.fillStyle = col;
     ctx.fillRect(x, y, w, h);
   };
-  // legs & boots
-  r(5, 18, 2, 4, p.pants);
-  r(9, 18, 2, 4, p.pants);
+  const long = l.body === 'dress' || l.body === 'habit' || l.body === 'robe';
+
+  // legs & boots (hidden under long garments)
+  if (!long) {
+    r(5, 18, 2, 4, l.pants);
+    r(9, 18, 2, 4, l.pants);
+  }
   r(4, 22, 3, 2, '#1e1712');
   r(9, 22, 3, 2, '#1e1712');
-  // body / cloak
-  r(4, 10, 8, 9, p.cloak);
-  r(10, 10, 2, 9, p.cloakDark);
-  r(6, 10, 4, 7, p.shirt);
-  r(7, 10, 2, 7, p.cloak);
-  r(4, 15, 8, 1, '#2a1d14'); // belt
-  r(7, 15, 1, 1, '#c8a24a'); // buckle
+
+  // body
+  if (long) {
+    r(4, 10, 8, 12, l.main);
+    r(10, 10, 2, 12, l.dark);
+    r(3, 18, 1, 4, l.main); // flared hem
+    r(12, 18, 1, 4, l.dark);
+  } else if (l.body === 'cloak') {
+    r(3, 10, 10, 10, l.main);
+    r(10, 10, 3, 10, l.dark);
+    r(7, 10, 2, 9, l.accent); // tunic peeking through
+  } else {
+    r(4, 10, 8, 9, l.main);
+    r(10, 10, 2, 9, l.dark);
+  }
+  if (l.body === 'armor') {
+    r(4, 10, 8, 9, '#8a8e96');
+    r(10, 10, 2, 9, '#5e626a');
+    r(5, 11, 1, 3, '#c4c8d0'); // highlight
+    r(6, 12, 4, 7, l.accent); // tabard
+    r(7, 13, 2, 1, '#e8d8a0'); // emblem
+  }
+  if (l.body === 'apron') r(5, 12, 6, 7, l.accent);
+  if (l.body === 'habit') {
+    r(5, 10, 6, 2, '#e8e4dc'); // white collar
+    r(7, 12, 2, 5, '#c8a24a'); // cross pendant
+    r(6, 13, 4, 1, '#c8a24a');
+  }
+  if (l.body === 'dress') r(5, 15, 6, 6, l.accent); // apron over the dress
+  if (l.body === 'robe') r(7, 10, 2, 12, l.accent); // sash
+  if (!long && l.body !== 'armor') {
+    r(4, 15, 8, 1, '#2a1d14'); // belt
+    r(7, 15, 1, 1, '#c8a24a');
+  }
+
   // arms
-  r(3, 11, 1, 6, p.cloakDark);
-  r(12, 11, 1, 6, p.cloakDark);
-  r(3, 17, 1, 1, p.skin);
-  r(12, 17, 1, 1, p.skin);
+  const sleeve = l.body === 'armor' ? '#5e626a' : l.dark;
+  r(3, 11, 1, 6, sleeve);
+  r(12, 11, 1, 6, sleeve);
+  r(3, 17, 1, 1, l.skin);
+  r(12, 17, 1, 1, l.skin);
+
   // head
-  r(5, 3, 6, 7, p.skin);
+  r(5, 3, 6, 7, l.skin);
   r(10, 4, 1, 6, 'rgba(0,0,0,0.12)');
   r(6, 6, 1, 1, '#1a1210');
   r(9, 6, 1, 1, '#1a1210');
-  if (p.beard) r(5, 8, 6, 2, p.hair);
-  else r(7, 8, 2, 1, 'rgba(90,40,30,0.5)');
-  if (p.hood) {
-    r(4, 2, 8, 2, p.cloak);
-    r(4, 2, 1, 8, p.cloak);
-    r(11, 2, 1, 8, p.cloakDark);
-    r(5, 1, 6, 1, p.cloak);
-  } else if (p.hat) {
-    r(3, 3, 10, 1, '#2a2420');
-    r(5, 0, 6, 3, '#3a3028');
-    r(5, 2, 6, 1, '#6a2a20');
+
+  // hair
+  const hc = l.hair;
+  if (l.hairStyle !== 'bald' && l.head !== 'wimple' && l.head !== 'helmet' && l.head !== 'hood') {
+    r(5, 2, 6, 2, hc);
+    r(4, 3, 1, 3, hc);
+    r(11, 3, 1, 3, hc);
+    if (l.hairStyle === 'long') {
+      r(4, 3, 1, 8, hc);
+      r(11, 3, 1, 8, hc);
+    }
+    if (l.hairStyle === 'bun') r(6, 0, 4, 2, hc);
+    if (l.hairStyle === 'braid') {
+      r(11, 3, 1, 5, hc);
+      r(12, 7, 1, 5, hc);
+      r(12, 12, 1, 1, '#c8a24a');
+    }
+  }
+  if (l.hairStyle === 'bald' && l.head === 'none') {
+    r(5, 2, 6, 1, l.skin);
+    r(4, 4, 1, 2, hc); // fringe above the ears
+    r(11, 4, 1, 2, hc);
+  }
+
+  // facial hair
+  const bc = l.beardColor ?? hc;
+  if (l.beard === 'full') {
+    r(5, 7, 6, 3, bc);
+    r(6, 10, 4, 1, bc);
+    r(7, 8, 2, 1, '#6a3a30'); // mouth
+  } else if (l.beard === 'mustache') {
+    r(6, 8, 4, 1, bc);
+  } else if (l.beard === 'stubble') {
+    r(5, 8, 6, 2, 'rgba(40,30,25,0.35)');
   } else {
-    r(5, 2, 6, 2, p.hair);
-    r(4, 3, 1, 4, p.hair);
-    r(11, 3, 1, 4, p.hair);
+    r(7, 8, 2, 1, 'rgba(120,50,40,0.6)');
+  }
+
+  // headwear
+  const hw = l.headColor ?? l.main;
+  switch (l.head) {
+    case 'hood':
+      r(4, 1, 8, 3, hw);
+      r(4, 1, 1, 9, hw);
+      r(11, 1, 1, 9, l.dark);
+      r(5, 0, 6, 1, hw);
+      break;
+    case 'wimple':
+      r(4, 2, 8, 1, '#e8e4dc');
+      r(4, 3, 1, 7, '#e8e4dc');
+      r(11, 3, 1, 7, '#e8e4dc');
+      r(5, 9, 6, 1, '#e8e4dc');
+      r(3, 1, 10, 2, hw); // black veil
+      r(3, 3, 1, 9, hw);
+      r(12, 3, 1, 9, hw);
+      r(4, 0, 8, 1, hw);
+      break;
+    case 'strawHat':
+      r(2, 3, 12, 1, '#c8a860');
+      r(5, 0, 6, 3, '#d8b870');
+      r(5, 2, 6, 1, '#8a5a30');
+      break;
+    case 'featherCap':
+      r(4, 1, 8, 2, hw);
+      r(11, 0, 1, 1, '#e8e0c8');
+      r(12, 0, 2, 1, '#e8e0c8');
+      r(12, 0, 1, 3, '#c83a2a'); // feather
+      r(13, 0, 1, 2, '#c83a2a');
+      break;
+    case 'helmet':
+      r(4, 1, 8, 3, '#8a8e96');
+      r(3, 4, 10, 1, '#6e727a');
+      r(5, 1, 2, 1, '#c4c8d0');
+      r(7, 0, 2, 1, '#6e727a');
+      break;
+    case 'cap':
+      r(5, 1, 6, 2, hw);
+      r(4, 3, 8, 1, hw);
+      break;
   }
   outline(ctx, W, H, '#120d0b');
   return c;

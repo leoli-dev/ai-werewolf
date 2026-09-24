@@ -89,7 +89,7 @@ export class AudioEngine {
     const t = this.ctx.currentTime;
     this.dayBus.gain.setTargetAtTime(night ? 0 : 1, t, 1.5);
     this.nightBus.gain.setTargetAtTime(night ? 1 : 0, t, 1.5);
-    this.rainGain.gain.setTargetAtTime(night ? 0.22 : 0, t, 2.5);
+    this.rainGain.gain.setTargetAtTime(night ? 1 : 0, t, 2.5);
     this.windGain.gain.setTargetAtTime(night ? 0.2 : 0.12, t, 2);
   }
 
@@ -198,21 +198,16 @@ export class AudioEngine {
     };
     gustLoop();
 
-    // rain: two layers of filtered noise (hiss + low patter)
+    // rain: individual drops (scheduled in `rainDrops`) over a very soft low wash — no hiss
     const r = this.noiseSrc(true);
     this.rainGain = ctx.createGain();
     this.rainGain.gain.value = 0;
-    const hiss = this.filter('highpass', 1800, 0.5);
-    const top = this.filter('lowpass', 9000, 0.5);
-    r.connect(hiss).connect(top).connect(this.rainGain);
-    const r2 = this.noiseSrc(true);
-    const patter = this.filter('bandpass', 700, 0.8);
-    const pg = ctx.createGain();
-    pg.gain.value = 0.7;
-    r2.connect(patter).connect(pg).connect(this.rainGain);
+    const wash = this.filter('lowpass', 420, 0.6);
+    const wg = ctx.createGain();
+    wg.gain.value = 0.25;
+    r.connect(wash).connect(wg).connect(this.rainGain);
     this.rainGain.connect(this.amb);
     r.start();
-    r2.start(0, 0.7);
   }
 
   thunder(distance = 0.5) {
@@ -288,10 +283,39 @@ export class AudioEngine {
   }
 
   /** Lookahead scheduler for melodic / rhythmic events of both themes. */
+  private nextDrop = 0;
+
+  /** 滴滴答答: sparse, individually pitched drops at night (~6 per second). */
+  private rainDrops(horizon: number) {
+    const ctx = this.ctx!;
+    if (this.night < 1) {
+      this.nextDrop = horizon;
+      return;
+    }
+    this.nextDrop = Math.max(this.nextDrop, ctx.currentTime);
+    while (this.nextDrop < horizon) {
+      const t = this.nextDrop;
+      this.nextDrop += -Math.log(1 - Math.random()) / 6; // Poisson, mean 6 drops/s
+      const pan = ctx.createStereoPanner();
+      pan.pan.value = Math.random() * 1.6 - 0.8;
+      pan.connect(this.rainGain);
+      const eave = Math.random() < 0.18; // a heavier drip off the eaves: lower, rounder "plop"
+      const f = eave ? 500 + Math.random() * 350 : 1500 + Math.random() * 2200;
+      const o = ctx.createOscillator();
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.exponentialRampToValueAtTime(f * (eave ? 1.6 : 0.55), t + (eave ? 0.07 : 0.035));
+      const g = this.env(t, 0.002, (eave ? 0.07 : 0.035) * (0.4 + Math.random() * 0.6), eave ? 0.11 : 0.05);
+      o.connect(g).connect(pan);
+      o.start(t);
+      o.stop(t + 0.2);
+    }
+  }
+
   private schedule() {
     const ctx = this.ctx;
     if (!ctx) return;
     const horizon = ctx.currentTime + 0.6;
+    this.rainDrops(horizon);
     // day theme: 66 bpm, sparse music box over pizzicato pulse
     const dayBeat = 60 / 66;
     while (this.nextBeat.day < horizon) {

@@ -6,7 +6,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Animals } from './animals';
 import { Atmosphere } from './atmosphere';
-import { characterCanvas, graveCanvas, paletteFor, pixelTexture, werewolfCanvas } from './pixel';
+import { PERSONAS } from '../personas';
+import { characterCanvas, graveCanvas, pixelTexture, werewolfCanvas, type Look } from './pixel';
 import { EXIT_PATH, billboardSprite, buildTown, seatAngle, seatPosition, type HouseRefs, type TownRefs } from './town';
 
 /** Separable tilt-shift blur: sharp band around `focus` (0..1 screen y), blur grows away from it. */
@@ -161,7 +162,7 @@ export class Stage {
     this.billboards.push(...this.animals.billboards);
 
     for (let i = 0; i < 12; i++) {
-      const tex = pixelTexture(characterCanvas(paletteFor(i)));
+      const tex = pixelTexture(characterCanvas(PERSONAS[i].look));
       const sprite = this.selfLit(billboardSprite(tex, 1.25, 1.875), tex);
       const base = seatPosition(i);
       sprite.position.copy(base);
@@ -450,6 +451,20 @@ export class Stage {
     sm.emissive = new THREE.Color(0xffffff);
     sm.emissiveIntensity = 0.15;
     return m;
+  }
+
+  /** Dress each seat as its persona (called when a game starts). */
+  setLooks(looks: Look[]) {
+    looks.forEach((look, i) => {
+      const tex = pixelTexture(characterCanvas(look));
+      const sprite = this.actors[i].sprite;
+      const m = sprite.material as THREE.MeshStandardMaterial;
+      m.map?.dispose();
+      m.map = tex;
+      m.emissiveMap = tex;
+      m.needsUpdate = true;
+      (sprite.customDepthMaterial as THREE.MeshDepthMaterial).map = tex;
+    });
   }
 
   /** Tint the human's own character slightly so they can find themselves. */

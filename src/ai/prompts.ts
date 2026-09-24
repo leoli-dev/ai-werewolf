@@ -1,3 +1,4 @@
+import type { Persona } from '../personas';
 import {
   ROLE_NAME,
   seat,
@@ -34,25 +35,7 @@ const ROLE_GUIDE: Record<Role, string> = {
     '你是守卫。每晚守护一人免受狼刀（不能连续两晚守同一人）。尽量守护关键好人（如跳出的真预言家），白天隐藏身份以免被刀。',
 };
 
-export interface Persona {
-  name: string;
-  trait: string;
-}
-
-export const PERSONAS: Persona[] = [
-  { name: '铁匠艾德', trait: '说话直来直去，脾气急' },
-  { name: '修女玛莎', trait: '温和谨慎，爱讲道理' },
-  { name: '酒馆老板布兰', trait: '圆滑健谈，喜欢开玩笑' },
-  { name: '猎户罗根', trait: '沉默寡言，一句话切中要害' },
-  { name: '学徒莉娜', trait: '年轻紧张，有时会自我怀疑' },
-  { name: '老农托马斯', trait: '慢条斯理，爱用农谚打比方' },
-  { name: '吟游诗人菲恩', trait: '语言华丽，喜欢夸张' },
-  { name: '药师伊索', trait: '冷静理性，注重逻辑链' },
-  { name: '守墓人格里姆', trait: '阴沉多疑，怀疑一切' },
-  { name: '裁缝薇拉', trait: '观察细致，关注别人措辞' },
-  { name: '磨坊主汉斯', trait: '热心肠，容易被说服' },
-  { name: '流浪骑士卡尔', trait: '自信强势，喜欢带节奏' },
-];
+export type { Persona } from '../personas';
 
 export function systemPrompt(view: PlayerView, persona: Persona): string {
   const self = view.self;

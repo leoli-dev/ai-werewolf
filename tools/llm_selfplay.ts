@@ -4,7 +4,7 @@
  * Usage: npx tsx tools/llm_selfplay.ts [seed] [wolfChatRounds]
  */
 import { LLMAgent } from '../src/ai/llmAgent';
-import { PERSONAS } from '../src/ai/prompts';
+import { PERSONAS } from '../src/personas';
 import { existsSync } from 'node:fs';
 import { OpenAICompatibleProvider, SerialQueue } from '../src/ai/provider';
 import { envProvider } from '../src/config';

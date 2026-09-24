@@ -1,7 +1,7 @@
 import './ui/styles.css';
 import { LLMAgent } from './ai/llmAgent';
 import { MockAgent } from './ai/mockAgent';
-import { PERSONAS } from './ai/prompts';
+import { PERSONAS, TRAVELLER_LOOK } from './personas';
 import { OpenAICompatibleProvider, SerialQueue } from './ai/provider';
 import { Game, GameAborted } from './game/game';
 import { Rng } from './game/rng';
@@ -59,10 +59,22 @@ async function play(settings: Settings) {
   let restart!: () => void;
   const restarted = new Promise<void>((r) => (restart = r));
   stage.resetAll();
-  ui = new GameUI(app, labels, stage, game, humanSeat, settings.godView, () => {
-    game.abort();
-    restart();
-  });
+  // everyone looks like their trade; the human is the hooded traveller
+  const looks = personas.map((p, i) => (i === humanSeat ? TRAVELLER_LOOK : p.look));
+  stage.setLooks(looks);
+  ui = new GameUI(
+    app,
+    labels,
+    stage,
+    game,
+    humanSeat,
+    settings.godView,
+    () => {
+      game.abort();
+      restart();
+    },
+    looks,
+  );
 
   const provider = new OpenAICompatibleProvider(settings.provider);
   const queue = new SerialQueue();
