@@ -569,10 +569,10 @@ export class Game {
     const detail = [...votes.entries()].map(([w, t]) => `${seat(w)}→${seat(t)}`).join('，');
     if (topCount * 2 > wolves.length) {
       target = top;
-      this.emit('wolfChat', `狼队投票：${detail}。今晚击杀 ${seat(target)}。`, channel);
+      this.emit('wolfChat', `狼队投票：${detail}。今晚击杀 ${seat(target)}。`, channel, { data: { target } });
     } else {
       target = this.rng.pick([...tally.keys()]);
-      this.emit('wolfChat', `狼队投票：${detail}。未过半数，系统随机选定 ${seat(target)}。`, channel);
+      this.emit('wolfChat', `狼队投票：${detail}。未过半数，系统随机选定 ${seat(target)}。`, channel, { data: { target } });
     }
     // the wolf turn only ends once the pack is fully back indoors
     await this.cue('wolvesIn');

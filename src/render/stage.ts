@@ -7,6 +7,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Animals } from './animals';
 import { Atmosphere } from './atmosphere';
 import { Explosions } from './explosion';
+import { Shield } from './shield';
 import { PERSONAS } from '../personas';
 import { characterCanvas, graveCanvas, pixelTexture, werewolfCanvas, type Look } from './pixel';
 import { EXIT_PATH, billboardSprite, buildTown, seatAngle, seatPosition, type HouseRefs, type TownRefs } from './town';
@@ -98,6 +99,10 @@ export interface StageSounds {
   thunder(distance: number): void;
   /** `big`: the house going up; otherwise the smaller blast where the wolf stood. */
   explosion(vol: number, big: boolean): void;
+  doorBang(vol: number): void;
+  growl(vol: number): void;
+  scream(vol: number): void;
+  bell(vol: number): void;
 }
 
 interface Tween {
@@ -135,8 +140,12 @@ export class Stage {
   private grade: ShaderPass;
   private atmo: Atmosphere;
   private fx: Explosions;
-  /** While a house blows up the camera pulls back to take in the whole cloud. */
-  private blastView: { target: THREE.Vector3; until: number } | null = null;
+  /**
+   * A set-piece shot overriding the speaker framing: a house blowing up (pulled
+   * back for the whole cloud) or the wolves' attack on a door.
+   */
+  private shot: { target: THREE.Vector3; until: number; dist: number; band: number } | null = null;
+  private shield: Shield;
   private town: TownRefs;
   private animals: Animals;
   private actors: Actor[] = [];
@@ -178,6 +187,7 @@ export class Stage {
 
     this.atmo = new Atmosphere(this.scene);
     this.fx = new Explosions(this.scene);
+    this.shield = new Shield(this.scene);
     this.town = buildTown();
     this.scene.add(this.town.root);
     this.billboards.push(...this.town.billboards);
@@ -294,6 +304,15 @@ export class Stage {
     const jobs: Promise<void>[] = [];
     for (const a of this.actors) {
       if (a.status !== 'alive') continue;
+      // wolves smashed in the door but the witch saved them: it has been patched up overnight
+      const h = this.town.houses[a.id];
+      if (h.state === 'broken') {
+        h.state = 'normal';
+        h.lit = true;
+        h.debris.visible = false;
+        h.doorPivot.visible = true;
+        h.doorPivot.rotation.set(0, 0, 0);
+      }
       const gen = ++a.gen;
       jobs.push(this.comeOutside(a, gen, a.sprite, a.base, 0.4 + Math.random() * 1.4));
     }
@@ -368,10 +387,129 @@ export class Stage {
     a.grave.visible = true;
     const h = this.town.houses[id];
     h.lit = false;
+    if (h.state === 'broken') return; // already smashed in by the wolves tonight
+    this.breakDoor(h, silent);
+  }
+
+  private breakDoor(h: HouseRefs, silent = false) {
     h.state = 'broken';
     h.debris.visible = true;
     h.doorPivot.visible = false; // torn off: it now lies on the ground (part of debris)
     if (!silent) this.sounds?.doorBreak(this.falloff(h.doorstep));
+  }
+
+  /**
+   * The kill, seen by the wolves: the pack runs to the victim's door and throws
+   * itself at it. Unguarded, the door gives, they rush in (a scream, blood out of
+   * the doorway) and come back out; guarded, a golden bell (金钟罩) flares with
+   * every blow and throws them back. Either way they end up by that door; wolvesIn
+   * then takes them home.
+   */
+  async wolfAttack(ids: number[], target: number, blocked: boolean): Promise<void> {
+    const h = this.town.houses[target];
+    const g = h.group;
+    // a wolf voted to kill a teammate: the victim slips home first
+    const victim = this.actors[target];
+    if (ids.includes(target) && victim.wolf.visible) await this.goInside(victim, ++victim.gen, victim.wolf, 0);
+    const pack = ids.map((id) => this.actors[id]).filter((a) => a.id !== target && a.status === 'alive' && a.wolf.visible);
+    if (!pack.length) return;
+    const gens = new Map(pack.map((a) => [a.id, ++a.gen]));
+    const live = (a: Actor) => () => a.gen === gens.get(a.id);
+    const { d } = h.size;
+    const n = pack.length;
+    // guarded: they gather outside the bell's flared rim
+    const back = blocked ? Math.hypot(h.size.w, d) / 2 + 1.9 : d / 2 + 1.8;
+    const spots = pack.map((_, k) => g.localToWorld(new THREE.Vector3((k - (n - 1) / 2) * 1.25, 0, back + (k % 2) * 0.35)));
+    const door = g.localToWorld(new THREE.Vector3(0, 1.1, d / 2 + 0.1));
+    const outward = g.localToWorld(new THREE.Vector3(0, 0, 1)).sub(g.position).setY(0).normalize();
+
+    this.shot = { target: g.position.clone().multiplyScalar(0.85).setY(1.4), until: this.time + 60, dist: 24, band: 0.3 };
+    this.yawGoal = Math.atan2(-g.position.x, -g.position.z) + 0.35; // from the plaza side, a little off-axis
+    this.resetView(false);
+    this.pitchGoal = 0.42;
+
+    // charge
+    await Promise.all(pack.map((a, k) => this.wait(k * 0.15).then(() => this.walk(a.wolf, spots[k], live(a), 6))));
+    if (pack.some((a) => !live(a)())) return;
+    this.sounds?.growl(this.falloff(door));
+    await this.wait(0.5);
+
+    // three blows
+    for (let hit = 0; hit < 3; hit++) {
+      await Promise.all(pack.map((a, k) => this.wait(k * 0.07).then(() => this.lunge(a.wolf, spots[k], h.doorstep, blocked ? 0.35 : 0.75))));
+      if (blocked) {
+        // struck where the leading wolf hit the bell
+        this.shield.strike(h, spots[0].clone().lerp(h.doorstep, 0.35).setY(1.2), hit === 2 ? 1.6 : 1);
+        this.sounds?.bell(this.falloff(door) * (hit === 2 ? 1 : 0.7));
+      } else {
+        this.sounds?.doorBang(this.falloff(door));
+        void this.rattleDoor(h);
+      }
+      this.fx.shake = Math.max(this.fx.shake, 0.12);
+      await this.wait(hit === 2 ? 0.1 : 0.35);
+    }
+
+    if (blocked) {
+      // thrown back from the bell, then they slink off
+      await Promise.all(pack.map((a, k) => this.walk(a.wolf, spots[k].clone().addScaledVector(outward, 2.2), live(a), 9)));
+      await this.wait(1.2);
+      this.shot = null;
+      return;
+    }
+
+    // the door gives; they pour in
+    this.breakDoor(h);
+    await this.wait(0.35);
+    await Promise.all(
+      pack.map((a, k) =>
+        this.wait(k * 0.18).then(async () => {
+          await this.walk(a.wolf, h.doorstep, live(a), 7);
+          await this.walk(a.wolf, h.inside, live(a), 7);
+          if (live(a)()) a.wolf.visible = false;
+        }),
+      ),
+    );
+    await this.wait(0.3);
+    this.sounds?.scream(this.falloff(door));
+    for (const w of h.windows) w.emissiveIntensity = 0; // the light inside goes out
+    h.lit = false;
+    await this.wait(0.5);
+    this.fx.blood(door.clone().setY(1), outward, 1);
+    await this.wait(0.45);
+    this.fx.blood(door.clone().setY(0.8), outward, 0.6);
+    await this.wait(1.2);
+    // back out, one by one
+    await Promise.all(
+      pack.map((a, k) =>
+        this.wait(k * 0.25).then(async () => {
+          if (!live(a)()) return;
+          a.wolf.position.copy(h.inside);
+          a.wolf.visible = true;
+          await this.walk(a.wolf, h.doorstep, live(a), 3);
+          await this.walk(a.wolf, spots[k], live(a), 3);
+        }),
+      ),
+    );
+    this.shot = null;
+  }
+
+  /** One leap at the door and back. */
+  private async lunge(body: THREE.Mesh, from: THREE.Vector3, door: THREE.Vector3, reach: number) {
+    const to = from.clone().lerp(door, reach);
+    await this.tween(0.16, (k) => {
+      body.position.lerpVectors(from, to, k * k);
+      body.position.y = Math.sin(k * Math.PI) * 0.5;
+    });
+    await this.tween(0.28, (k) => {
+      body.position.lerpVectors(to, from, 1 - (1 - k) * (1 - k));
+      body.position.y = 0;
+    });
+  }
+
+  /** The door jumps on its hinges under a blow. */
+  private async rattleDoor(h: HouseRefs) {
+    if (h.state !== 'normal') return;
+    await this.tween(0.3, (k) => this.setDoor(h, Math.sin(k * Math.PI * 5) * 0.12 * (1 - k)));
   }
 
   /**
@@ -394,7 +532,7 @@ export class Stage {
     this.yawGoal = Math.atan2(-house.group.position.x, -house.group.position.z);
     this.resetView(false);
     this.pitchGoal = 0.3;
-    this.blastView = { target: house.group.position.clone().multiplyScalar(0.7).setY(6), until: this.time + 8 };
+    this.shot = { target: house.group.position.clone().multiplyScalar(0.7).setY(6), until: this.time + 8, dist: 50, band: 0.5 };
     await this.wait(0.35);
     if (a.gen !== gen) return; // a new game started meanwhile
     this.sounds?.explosion(1, true);
@@ -435,7 +573,8 @@ export class Stage {
       a.grave.visible = false;
     }
     this.fx.reset();
-    this.blastView = null;
+    this.shot = null;
+    this.shield.hide();
     for (const h of this.town.houses) {
       h.group.visible = true;
       h.lit = true;
@@ -663,6 +802,7 @@ export class Stage {
     const n = this.atmo.mix;
     this.atmo.update(dt, t);
     this.fx.update(dt, t);
+    this.shield.update(dt, t);
     this.stepTweens(dt);
     for (const w of this.town.windows) w.emissiveIntensity = THREE.MathUtils.lerp(0.15, 2.2, n);
     for (const h of this.town.houses) {
@@ -693,12 +833,12 @@ export class Stage {
     const focusedActor = this.focusId !== null ? this.actors[this.focusId] : null;
     const focusPos = focusedActor ? this.anchor(focusedActor) : null;
     const focused = focusPos ? { base: focusPos.clone().setY(0) } : null;
-    if (this.blastView && t > this.blastView.until) this.blastView = null;
-    const tgt = this.blastView
-      ? this.blastView.target.clone().add(this.pan)
+    if (this.shot && t > this.shot.until) this.shot = null;
+    const tgt = this.shot
+      ? this.shot.target.clone().add(this.pan)
       : (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
-    const dist = (this.blastView ? 50 : focused ? 34 : 40) * this.userZoom; // stay wide enough to keep most of the ring (and their bubbles) in view
+    const dist = (this.shot ? this.shot.dist : focused ? 34 : 40) * this.userZoom; // stay wide enough to keep most of the ring (and their bubbles) in view
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
     const sway = Math.sin(t * 0.05) * 0.12;
     {
@@ -759,7 +899,7 @@ export class Stage {
     for (const p of [this.tiltH, this.tiltV]) {
       p.uniforms.focus.value += (focusY - p.uniforms.focus.value) * Math.min(1, dt * 3);
       // keep the towering cloud sharp instead of lost in the tilt-shift blur
-      p.uniforms.band.value = this.blastView ? 0.5 : focused ? 0.1 : 0.16;
+      p.uniforms.band.value = this.shot ? this.shot.band : focused ? 0.1 : 0.16;
     }
     this.bloom.strength = THREE.MathUtils.lerp(0.35, 0.9, n) + this.atmo.lightning * 0.4 + this.fx.flash * 0.4;
     this.grade.uniforms.time.value = t;

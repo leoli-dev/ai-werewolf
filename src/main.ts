@@ -35,6 +35,10 @@ stage.sounds = {
   caw: (v) => audio.caw(v),
   thunder: (d) => audio.thunder(d),
   explosion: (v, big) => audio.explosion(v, big),
+  doorBang: (v) => audio.doorBang(v),
+  growl: (v) => audio.growl(v),
+  scream: (v) => audio.scream(v),
+  bell: (v) => audio.bell(v),
 };
 
 // sound settings apply everywhere (title screen included)

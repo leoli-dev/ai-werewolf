@@ -507,6 +507,103 @@ export class AudioEngine {
     }
   }
 
+  /** Wolves throwing themselves at a door: a heavy wooden thud and a creak of strained planks. */
+  doorBang(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const o = this.ctx!.createOscillator();
+    o.frequency.setValueAtTime(110, t);
+    o.frequency.exponentialRampToValueAtTime(40, t + 0.25);
+    const g = this.env(t, 0.003, 1.1 * vol, 0.35);
+    o.connect(g);
+    this.out(g, this.sfx, 0.35);
+    o.start(t);
+    o.stop(t + 0.45);
+    this.burst(this.sfx, t, 'lowpass', 900, 0.9, 0.8 * vol, 0.002, 0.18, 0.3);
+    this.burst(this.sfx, t + 0.02, 'bandpass', 2400, 4, 0.18 * vol, 0.002, 0.12);
+  }
+
+  /** A low werewolf snarl. */
+  growl(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(70, t);
+    o.frequency.linearRampToValueAtTime(95, t + 0.4);
+    o.frequency.linearRampToValueAtTime(60, t + 1.1);
+    // rough amplitude flutter
+    const am = ctx.createGain();
+    am.gain.value = 0.5;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 23;
+    const la = ctx.createGain();
+    la.gain.value = 0.5;
+    lfo.connect(la).connect(am.gain);
+    const f = this.filter('lowpass', 650, 2);
+    const env = this.env(t, 0.08, 0.5 * vol, 1.1);
+    o.connect(am).connect(f).connect(env);
+    this.out(env, this.sfx, 0.4);
+    o.start(t);
+    o.stop(t + 1.3);
+    lfo.start(t);
+    lfo.stop(t + 1.3);
+    this.burst(this.sfx, t, 'bandpass', 380, 1.5, 0.25 * vol, 0.1, 0.9);
+  }
+
+  /** The victim's scream, cut short. */
+  scream(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const ctx = this.ctx!;
+    const mix = ctx.createGain();
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 9;
+    const la = ctx.createGain();
+    la.gain.value = 40;
+    lfo.connect(la);
+    for (const det of [0, 14, -11]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(520, t);
+      o.frequency.linearRampToValueAtTime(1350, t + 0.18);
+      o.frequency.linearRampToValueAtTime(1200, t + 0.9);
+      o.frequency.exponentialRampToValueAtTime(380, t + 1.25);
+      o.detune.value = det * 10;
+      la.connect(o.frequency);
+      o.connect(mix);
+      o.start(t);
+      o.stop(t + 1.3);
+    }
+    lfo.start(t);
+    lfo.stop(t + 1.3);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.linearRampToValueAtTime(0.3 * vol, t + 0.05);
+    env.gain.setValueAtTime(0.28 * vol, t + 1.0);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + 1.25);
+    // vowel formants ("aah")
+    mix.connect(this.filter('bandpass', 1000, 4)).connect(env);
+    mix.connect(this.filter('bandpass', 2700, 6)).connect(env);
+    mix.connect(this.filter('bandpass', 3600, 8)).connect(env);
+    this.out(env, this.sfx, 0.8);
+    this.burst(this.sfx, t, 'highpass', 3000, 0.6, 0.06 * vol, 0.03, 1.1);
+    // the cut-off: a thump and a wet tearing hiss
+    this.burst(this.sfx, t + 1.2, 'lowpass', 500, 1, 0.5 * vol, 0.004, 0.3, 0.4);
+    this.burst(this.sfx, t + 1.22, 'bandpass', 1800, 1.2, 0.18 * vol, 0.01, 0.35);
+  }
+
+  /** 金钟罩: a struck temple bell (inharmonic partials, long shimmer). */
+  bell(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    for (const [ratio, amp, decay] of [[1, 0.5, 3.2], [2.76, 0.3, 2.2], [5.4, 0.18, 1.4], [8.93, 0.1, 0.8], [0.5, 0.25, 3.6]] as const) {
+      this.tone(this.sfx, t, 330 * ratio, 'sine', amp * 0.5 * vol, 0.004, decay, 0.9);
+    }
+    this.burst(this.sfx, t, 'highpass', 4000, 0.7, 0.2 * vol, 0.001, 0.08, 0.5);
+  }
+
   seal(vol = 1, delay = 0) {
     const t = this.now(delay);
     if (t < 0) return;

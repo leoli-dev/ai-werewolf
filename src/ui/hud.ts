@@ -335,6 +335,7 @@ export class GameUI {
   // ───────────────────────── game hooks ─────────────────────────
 
   onEvent(e: GameEvent) {
+    if (e.type === 'wolfChat' && typeof e.data?.target === 'number' && this.canSee(e)) this.wolfTarget = e.data.target;
     if (this.restoring) {
       // replaying a save: only keep the bubbles current; restored() rebuilds the rest at once
       if (this.canSee(e)) this.trackBubble(e);
@@ -474,6 +475,8 @@ export class GameUI {
   // ───────────────────────── scene choreography ─────────────────────────
 
   private pendingExile = new Set<number>();
+  /** Tonight's kill, from the wolves' vote (only reaches wolf / god-view players). */
+  private wolfTarget: number | null = null;
   /** A wolf's house going up; the GM waits for it before nightfall. */
   private blast: Promise<void> | null = null;
   private bubbleScope = '';
@@ -531,12 +534,18 @@ export class GameUI {
         break;
       case 'wolvesIn':
         if (this.wolvesShown.length) {
-          job = this.stage.wolvesIn(this.wolvesShown);
+          const shown = this.wolvesShown;
+          const target = this.wolfTarget;
           this.wolvesShown = [];
+          this.wolfTarget = null;
+          // the kill plays out first (the guard's 金钟罩 turns it away), then the pack goes home
+          const attack = target === null ? Promise.resolve() : this.stage.wolfAttack(shown, target, this.game.state.lastGuarded === target);
+          job = attack.then(() => this.stage.wolvesIn(shown));
         }
         break;
     }
-    return Promise.race([job, new Promise<void>((r) => setTimeout(r, 12000))]);
+    // capped so a hidden tab (paused rAF) never stalls the game; the attack takes a while
+    return Promise.race([job, new Promise<void>((r) => setTimeout(r, c === 'wolvesIn' ? 40000 : 12000))]);
   }
 
   // ───────────────────────── roster / role card ─────────────────────────

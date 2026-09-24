@@ -8,7 +8,7 @@ import type { HouseRefs } from './town';
  * smoking for the rest of the game.
  */
 
-const Kind = { Fire: 0, Smoke: 1, Dust: 2, Ember: 3 } as const;
+const Kind = { Fire: 0, Smoke: 1, Dust: 2, Ember: 3, Blood: 4 } as const;
 type Kind = (typeof Kind)[keyof typeof Kind];
 
 interface Spawn {
@@ -36,6 +36,7 @@ const FIRE_END = new THREE.Color(0.45, 0.07, 0.02);
 const SMOKE = new THREE.Color(0.042, 0.039, 0.036);
 const SMOKE_HOT = new THREE.Color(0.9, 0.28, 0.05);
 const DUST = new THREE.Color(0.06, 0.05, 0.04);
+const BLOOD = new THREE.Color(0.2, 0.003, 0.002);
 
 const vert = `
   attribute float size;
@@ -218,6 +219,10 @@ class Layer {
           c.copy(DUST);
           alpha *= Math.min(1, age / 0.1) * Math.pow(1 - k, 1.6);
           break;
+        case Kind.Blood:
+          c.copy(BLOOD);
+          alpha *= k < 0.7 ? 1 : 1 - (k - 0.7) / 0.3;
+          break;
         case Kind.Ember: {
           const flick = 0.55 + 0.45 * Math.sin(t * 31 + i * 1.7);
           c.setRGB(3.4 * flick, 1.3 * flick, 0.3 * flick);
@@ -324,6 +329,20 @@ export class Explosions {
   setViewport(heightPx: number, fovDeg: number) {
     const scale = heightPx / (2 * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
     for (const l of [this.smoke, this.fire, this.sparks]) l.uniforms.scale.value = scale;
+  }
+
+  /** A spray of blood from `at`, thrown mostly along `dir` (a wolf kill through the doorway). */
+  blood(at: THREE.Vector3, dir: THREE.Vector3, amount = 1) {
+    const d = dir.clone().normalize();
+    for (let k = 0; k < 140 * amount; k++) {
+      const v = d.clone().multiplyScalar(rand(2, 7)).add(randomDir(0.8).multiplyScalar(rand(0.5, 2.5)));
+      v.y = Math.abs(v.y) + rand(0.5, 3);
+      this.smoke.spawn({ kind: Kind.Blood, pos: at, vel: v, life: rand(0.9, 1.8), size: [rand(0.12, 0.3), 0.1], gravity: 13, drag: 0.8 });
+    }
+    // a heavier mist hanging in the doorway
+    for (let k = 0; k < 18 * amount; k++) {
+      this.smoke.spawn({ kind: Kind.Blood, pos: at, vel: d.clone().multiplyScalar(rand(0.5, 1.5)).add(randomDir().multiplyScalar(0.5)), life: rand(0.6, 1.2), size: [0.5, 1.1], alpha: 0.55, drag: 3 });
+    }
   }
 
   /** The small blast where the wolf stood. */
