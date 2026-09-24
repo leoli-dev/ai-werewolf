@@ -638,16 +638,26 @@ export class GameUI {
   private appendMsg(e: GameEvent, scroll = true) {
     const P = this.game.players;
     let el: HTMLElement;
-    const who = (id: number) => h('span', { class: 'who' }, h('span', { class: 'n', style: `border-color:${bubbleColor(id).edge};background:${bubbleColor(id).bg};color:#221a14` }, String(id + 1)), P[id].name);
+    // spoken lines are blocks in the speaker's bubble colour, name included (same as over their head)
+    const said = (id: number, cls: string, ...rest: (Node | string | null)[]) =>
+      h(
+        'div',
+        { class: `msg said ${cls}`, style: bubbleStyle(id) },
+        h('div', { class: 'who' }, h('span', { class: 'n' }, String(id + 1)), P[id].name, id === this.me ? h('span', { class: 'you' }, '（你）') : null, ...rest),
+      );
     switch (e.type) {
       case 'speech': {
         const kind = { discussion: '', summary: '总结', lastWords: '遗言', defense: '正名' }[e.speechKind ?? 'discussion'];
         const fb = e.data?.fallback ? h('span', { class: 'kind fallback', title: '模型调用失败，由规则 AI 代发' }, '规则AI代打') : null;
-        el = h('div', { class: `msg ${e.speaker === this.me ? 'me' : ''}` }, who(e.speaker!), kind ? h('span', { class: 'kind' }, kind) : null, fb, h('div', {}, e.text));
+        el = said(e.speaker!, '', kind ? h('span', { class: 'kind' }, kind) : null, fb);
+        el.append(h('div', { class: 'text' }, e.text));
         break;
       }
       case 'wolfChat':
-        el = h('div', { class: 'msg wolf' }, e.speaker !== undefined ? who(e.speaker) : null, e.text);
+        if (e.speaker !== undefined) {
+          el = said(e.speaker, 'wolf', h('span', { class: 'kind' }, '狼队'));
+          el.append(h('div', { class: 'text' }, e.text));
+        } else el = h('div', { class: 'msg wolf' }, e.text);
         break;
       default:
         el = h('div', { class: `msg ${e.type}` }, e.text);

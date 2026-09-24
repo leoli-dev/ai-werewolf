@@ -253,3 +253,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .modal.key-dialog input { background: #120f0d; border: 2px solid var(--edge); padding: 8px; width: 100%; }
 .engine-cfg .inline > select { flex: 0 0 180px; width: 180px; }
 .engine-cfg .stack { display: flex; flex-direction: column; gap: 4px; }
+
+/* ── spoken lines in the log: a block in the speaker's bubble colour ── */
+.msg.said { color: #221a14; border: 2px solid; padding: 5px 9px 6px; margin-right: 3px; }
+.msg.said.wolf { padding-left: 9px; border-left-width: 2px; }
+.msg.said .who { display: flex; align-items: center; gap: 4px; font-weight: 700; margin: 0 0 2px; color: inherit; }
+.msg.said .who .n { font-family: var(--pixel); font-size: 11px; padding: 0 4px; border: 1px solid currentColor; background: rgba(255, 255, 255, 0.45); margin-right: 2px; }
+.msg.said .who .you { font-weight: 400; font-size: 12px; opacity: 0.75; }
+.msg.said .kind { color: inherit; border-color: currentColor; opacity: 0.7; font-weight: 400; margin-left: 4px; }
+.msg.said .kind.fallback { color: #9a2a22; opacity: 1; }
+.msg.said .text { white-space: pre-wrap; overflow-wrap: anywhere; }

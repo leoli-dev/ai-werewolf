@@ -106,11 +106,14 @@ interface Tween {
 
 const WALK_SPEED = 2.6;
 /** Camera limits: look around a little, never orbit freely. */
-const MAX_DRAG_YAW = 0.52; // ±30°
-const PITCH_MIN = 0.4;
-const PITCH_MAX = 0.8;
-const ZOOM_MIN = 0.8;
-const ZOOM_MAX = 1.25;
+/** Camera limits: free orbit; pitch from low over the rooftops to nearly top-down. */
+const PITCH_MIN = 0.15;
+const PITCH_MAX = 1.35;
+const ZOOM_MIN = 0.35;
+// farther than this the night fog (FogExp2 0.02) swallows the town
+const ZOOM_MAX = 1.4;
+/** How far the view may be panned away from its framed target. */
+const MAX_PAN = 26;
 
 export interface ScreenPos {
   x: number;
@@ -151,6 +154,8 @@ export class Stage {
   /** Player drag offset, limited to a small arc around the framed view. */
   private dragYaw = 0;
   private userZoom = 1;
+  /** Player pan offset on the ground (right-drag / shift-drag), dropped when the next speaker is framed. */
+  private pan = new THREE.Vector3();
 
   onFrame?: (positions: ScreenPos[]) => void;
   onPick?: (id: number) => void;
@@ -239,15 +244,24 @@ export class Stage {
 
   /**
    * Swing the camera round to look at `id` from the plaza side, so only their own
-   * house is behind them and no building blocks the view. Resets manual pitch/zoom.
+   * house is behind them and no building blocks the view. Drops the player's
+   * rotation / pan / pitch; keeps their zoom level.
    */
   private reframe(id: number) {
     const a = this.actors[id];
     const p = this.anchor(a) ?? a.base;
     // camera offset direction is (sin yaw, cos yaw): point it from the actor towards the centre
     this.yawGoal = Math.atan2(-p.x, -p.z);
+    this.resetView(false);
+  }
+
+  /** Back to the framed view (double-click). */
+  private resetView(zoom: boolean) {
     this.pitchGoal = 0.55;
-    this.userZoom = 1;
+    if (zoom) this.userZoom = 1;
+    this.pan.set(0, 0, 0);
+    // unwind the free orbit the short way round before easing it back to 0
+    this.dragYaw = Math.atan2(Math.sin(this.dragYaw), Math.cos(this.dragYaw));
     this.dragReset = true;
   }
 
@@ -522,11 +536,16 @@ export class Stage {
   private bindInput() {
     const el = this.renderer.domElement;
     let dragging = false;
+    let panning = false;
     let moved = 0;
     let lx = 0;
     let ly = 0;
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
+    el.addEventListener('dblclick', () => this.resetView(true));
     el.addEventListener('pointerdown', (e) => {
       dragging = true;
+      // left drag orbits; right drag (or shift + left) pans
+      panning = e.button === 2 || e.shiftKey;
       moved = 0;
       lx = e.clientX;
       ly = e.clientY;
@@ -539,15 +558,23 @@ export class Stage {
       moved += Math.abs(dx) + Math.abs(dy);
       lx = e.clientX;
       ly = e.clientY;
-      // small town, fixed cast: only a gentle look-around, no free 360° orbit
-      this.dragYaw = THREE.MathUtils.clamp(this.dragYaw - dx * 0.004, -MAX_DRAG_YAW, MAX_DRAG_YAW);
-      this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.002, PITCH_MIN, PITCH_MAX);
-      this.pitchGoal = null;
       this.dragReset = false;
+      if (panning) {
+        // grab the ground: it follows the pointer
+        const k = this.camDist * 0.0016;
+        const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+        const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+        this.pan.addScaledVector(right, -dx * k).addScaledVector(forward, dy * k);
+        if (this.pan.length() > MAX_PAN) this.pan.setLength(MAX_PAN);
+        return;
+      }
+      this.dragYaw -= dx * 0.005;
+      this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.003, PITCH_MIN, PITCH_MAX);
+      this.pitchGoal = null;
     });
     el.addEventListener('pointerup', (e) => {
       dragging = false;
-      if (moved < 6) this.pick(e);
+      if (moved < 6 && e.button === 0) this.pick(e);
     });
     el.addEventListener(
       'wheel',
@@ -623,7 +650,7 @@ export class Stage {
     const focusedActor = this.focusId !== null ? this.actors[this.focusId] : null;
     const focusPos = focusedActor ? this.anchor(focusedActor) : null;
     const focused = focusPos ? { base: focusPos.clone().setY(0) } : null;
-    const tgt = focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0);
+    const tgt = (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
     const dist = (focused ? 34 : 40) * this.userZoom; // stay wide enough to keep most of the ring (and their bubbles) in view
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
