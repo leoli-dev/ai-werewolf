@@ -88,6 +88,26 @@ describe('Game engine', () => {
     }
   });
 
+  it('seer learns the exact role of the checked player', async () => {
+    const g = new Game({ names, humanSeat: -1, seed: 3, wolfChatRounds: 1 });
+    const seer = g.players.find((p) => p.role === 'seer')!.id;
+    const witch = g.players.find((p) => p.role === 'witch')!.id;
+    const agent: Agent = {
+      speak: async () => 'pass',
+      choose: async (r) => {
+        if (r.day > 1) throw new Error('stop');
+        if (r.action === 'seer') return witch;
+        if (r.action === 'wolfKill') return r.candidates.find((c) => c !== seer && c !== witch)!;
+        return null;
+      },
+    };
+    g.setAgents(names.map(() => agent));
+    await g.run().catch(() => {});
+    expect(g.state.seerChecks[witch]).toBe('witch');
+    expect(g.viewFor(seer).known[witch]).toBe('witch');
+    expect(g.events.some((e) => e.text.includes('【女巫】'))).toBe(true);
+  });
+
   it('guard blocks the wolf kill but not poison', async () => {
     const g = new Game({ names, humanSeat: -1, seed: 7, wolfChatRounds: 1 });
     const villager = g.players.find((p) => p.role === 'villager')!.id;

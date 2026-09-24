@@ -7,6 +7,8 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   reasoning: ReasoningLevel;
+  /** Reasoning for votes, night skills and wolf chat (short, frequent calls). */
+  decisionReasoning: ReasoningLevel;
   /** Route through the Vite dev server (`/__llm`) to avoid CORS on local servers. */
   useProxy: boolean;
   timeoutMs: number;
@@ -17,6 +19,7 @@ export const DEFAULT_PROVIDER: ProviderConfig = {
   apiKey: '',
   model: 'mtplx-flash-next-optimized-speed',
   reasoning: 'medium',
+  decisionReasoning: 'low',
   useProxy: true,
   timeoutMs: 180_000,
 };
@@ -91,7 +94,7 @@ export class OpenAICompatibleProvider {
     return (json?.data ?? []).map((m: { id: string }) => m.id);
   }
 
-  async chat(messages: ChatMessage[], opts: { maxTokens?: number; temperature?: number } = {}): Promise<ChatResult> {
+  async chat(messages: ChatMessage[], opts: { maxTokens?: number; temperature?: number; reasoning?: ReasoningLevel } = {}): Promise<ChatResult> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages,
@@ -99,7 +102,10 @@ export class OpenAICompatibleProvider {
       temperature: opts.temperature ?? 0.9,
       stream: false,
     };
-    if (this.config.reasoning !== 'none') body.reasoning_effort = this.config.reasoning;
+    const reasoning = opts.reasoning ?? this.config.reasoning;
+    if (reasoning !== 'none') body.reasoning_effort = reasoning;
+    // Qwen-style servers: ask the chat template to skip thinking entirely (ignored elsewhere)
+    else body.chat_template_kwargs = { enable_thinking: false };
     const t0 = performance.now();
     const json = await this.request('/chat/completions', { method: 'POST', body });
     const msg = json?.choices?.[0]?.message ?? {};

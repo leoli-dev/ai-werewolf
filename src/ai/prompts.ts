@@ -12,7 +12,7 @@ import {
 export const RULES_TEXT = `【规则】12 人屠边局：4 狼人、4 村民、预言家、女巫、猎人、守卫。
 - 狼人阵营：杀光所有神职或杀光所有村民（屠边）即获胜。好人阵营：投票放逐所有狼人即获胜。
 - 夜晚顺序：预言家查验 → 守卫守护 → 狼人商量并投票杀人 → 猎人可开枪 → 女巫用药。
-- 预言家每晚查验一人是好人还是狼人；若当晚在查验后被杀，查验信息作废。
+- 预言家每晚查验一人，得知其具体身份（如狼人、女巫、村民）；若当晚在查验后被杀，查验信息作废。
 - 守卫每晚守护一人，不能守自己，不能连续两晚守同一人；只挡狼刀，不挡毒和枪。
 - 女巫有金水（救人）、银水（毒药）各一瓶，同一晚可以都用；只知道谁死了、不知道死因；不能毒自己。
 - 猎人整局可以开一枪带走一名玩家（不能射自己），夜里轮到他时或出局时都可以开。
@@ -25,7 +25,7 @@ const ROLE_GUIDE: Record<Role, string> = {
   villager:
     '你是村民，没有技能。认真分析每个人的发言逻辑、投票行为和前后矛盾之处，找出狼人。可以保护可信的神职，不要轻易暴露谁是神。',
   seer:
-    '你是预言家。每晚查验一人。白天可以选择起跳公开身份并报出查验结果（包括查到的狼），带领好人投票；也要提防狼人悍跳冒充你。',
+    '你是预言家。每晚查验一人，能看到对方的具体身份。白天可以选择起跳公开身份并报出查验结果（包括查到的狼），带领好人投票；也要提防狼人悍跳冒充你。',
   witch:
     '你是女巫。你只知道夜里谁死了，不知道死因。救人和毒人都要根据发言与局势判断。白天一般不急于暴露身份，但必要时可以公开用药信息来证明自己或指认狼人。',
   hunter:
@@ -128,7 +128,7 @@ export function privateNotebook(view: PlayerView, notes: string[]): string {
   if (view.guard) lines.push(`（上一晚守护：${view.guard.lastGuarded === null ? '无' : seat(view.guard.lastGuarded)}，今晚不能再守同一人）`);
   if (view.self.role === 'seer') {
     const checks = Object.entries(view.known).filter(([id]) => Number(id) !== view.self.id);
-    lines.push(`（已知查验：${checks.map(([id, t]) => `${seat(Number(id))}=${t === 'wolf' ? '狼' : '好人'}`).join('，') || '无'}）`);
+    lines.push(`（已知查验：${checks.map(([id, t]) => `${seat(Number(id))}=${ROLE_NAME[t as Role] ?? t}`).join('，') || '无'}）`);
   }
   for (const n of notes) lines.push(`[心得] ${n}`);
   return lines.join('\n') || '（暂无）';
@@ -144,7 +144,9 @@ export function speechTask(req: SpeechRequest | WolfChatRequest, view: PlayerVie
   if (req.kind === 'wolfChat') {
     return `现在是第 ${req.day} 夜，狼队秘密频道第 ${req.round}/${req.rounds} 轮沟通（只有狼人能看到）。
 ${aliveList(view)}
-和队友商量今晚刀谁、明天白天怎么打配合（谁悍跳、怎么站边）。60 字以内，直接说内容。如果已经商量好、没有补充，只回复：pass`;
+${req.round === 1
+    ? '和队友商量今晚刀谁、明天白天怎么打配合（谁悍跳、怎么站边）。60 字以内，直接说内容。'
+    : '前面已经商量过（见私人记录本里的狼队记录）。如果刀口和打法已经基本一致，只回复：pass。只有存在实质分歧或新计划时才发言，40 字以内。'}`;
   }
   const what = {
     discussion: '现在轮到你白天发言。分析局势，给出你的怀疑对象和理由，也可以根据策略表明（或伪装）身份。',

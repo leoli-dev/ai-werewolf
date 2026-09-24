@@ -4,7 +4,6 @@ import {
   ROLE_NAME,
   STANDARD_BOARD,
   seat,
-  teamOf,
   type Agent,
   type DeathCause,
   type DecisionRequest,
@@ -45,8 +44,8 @@ export interface GameState {
   witch: { hasAntidote: boolean; hasPoison: boolean };
   hunterShot: boolean;
   lastGuarded: number | null;
-  /** Seer knowledge: target -> alignment (only results that survived dawn). */
-  seerChecks: Record<number, 'good' | 'wolf'>;
+  /** Seer knowledge: target -> exact role (only results that survived dawn). */
+  seerChecks: Record<number, Role>;
 }
 
 export interface GameHooks {
@@ -69,7 +68,7 @@ export class Game {
 
   constructor(private opts: GameOptions, private hooks: GameHooks = {}) {
     this.rng = new Rng(opts.seed);
-    this.wolfChatRounds = opts.wolfChatRounds ?? 5;
+    this.wolfChatRounds = opts.wolfChatRounds ?? 3;
     this.paceMs = opts.paceMs ?? 0;
     const roles = this.dealRoles();
     this.state = {
@@ -297,13 +296,13 @@ export class Game {
 
     // 1. 预言家
     const seer = this.byRole('seer');
-    let seerResult: { target: number; team: 'good' | 'wolf' } | null = null;
+    let seerResult: { target: number; role: Role } | null = null;
     if (seer?.alive) {
       this.gm('预言家请睁眼，请选择要查验的玩家。');
       const cands = alive.filter((i) => i !== seer.id && !(i in this.state.seerChecks));
       const target = await this.askTarget(seer.id, 'seer', cands.length ? cands : alive.filter((i) => i !== seer.id), false, '选择今晚要查验的玩家。', '预言家查验中');
       if (target !== null) {
-        seerResult = { target, team: teamOf(this.players[target].role) };
+        seerResult = { target, role: this.players[target].role };
         this.gm(`你查验了 ${seat(target)}，结果将在天亮时揭晓（若你活到天亮）。`, [seer.id]);
       }
       await this.pace();
@@ -371,8 +370,8 @@ export class Game {
     this.setPhase('dawn');
     const deaths = [...pending.keys()].sort((a, b) => a - b);
     if (seer && seerResult && !pending.has(seer.id) && seer.alive) {
-      this.state.seerChecks[seerResult.target] = seerResult.team;
-      this.emit('private', `查验结果：${seat(seerResult.target)} 是${seerResult.team === 'wolf' ? '狼人' : '好人'}。`, { kind: 'private', to: [seer.id] }, { data: { check: seerResult.target, team: seerResult.team } });
+      this.state.seerChecks[seerResult.target] = seerResult.role;
+      this.emit('private', `查验结果：${seat(seerResult.target)} 的身份是【${ROLE_NAME[seerResult.role]}】。`, { kind: 'private', to: [seer.id] }, { data: { check: seerResult.target, role: seerResult.role } });
     }
     this.gm(`天亮了。${deaths.length ? `昨晚死亡的玩家：${deaths.map((i) => `${seat(i)} ${this.players[i].name}`).join('、')}。` : '昨晚是平安夜。'}`);
     for (const id of deaths) this.kill(id, pending.get(id)!);

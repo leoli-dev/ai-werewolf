@@ -1,5 +1,5 @@
 import { Rng } from '../game/rng';
-import { seat, type Agent, type PlayerView, type SpeechRequest, type TargetRequest, type WolfChatRequest } from '../game/types';
+import { ROLE_NAME, seat, type Agent, type Role, type PlayerView, type SpeechRequest, type TargetRequest, type WolfChatRequest } from '../game/types';
 
 /**
  * Offline rule-based agent: no LLM needed. Used for tests and the
@@ -26,7 +26,8 @@ export class MockAgent implements Agent {
     const known = v.known;
     const knownWolf = cands.filter((c) => known[c] === 'wolf' || (known[c] === 'werewolf' && !this.isWolf(v)));
     if (knownWolf.length) return this.rng.pick(knownWolf);
-    const safe = cands.filter((c) => !(known[c] === 'good' || (this.isWolf(v) ? known[c] === 'werewolf' : false)));
+    // for a wolf, teammates are safe; for good players, any known non-wolf role is safe
+    const safe = cands.filter((c) => !(known[c] && known[c] !== 'wolf' && (this.isWolf(v) ? known[c] === 'werewolf' : known[c] !== 'werewolf')));
     const pool = safe.length ? safe : cands;
     let best = pool[0];
     let bestScore = -Infinity;
@@ -53,7 +54,7 @@ export class MockAgent implements Agent {
     if (v.self.role === 'seer') {
       const checks = Object.entries(v.known).filter(([id]) => Number(id) !== v.self.id);
       if (checks.length) {
-        return `我是预言家，${checks.map(([id, t]) => `${seat(Number(id))}是${t === 'wolf' ? '狼人' : '好人'}`).join('，')}。`;
+        return `我是预言家，${checks.map(([id, t]) => `${seat(Number(id))}是${ROLE_NAME[t as Role] ?? t}`).join('，')}。`;
       }
     }
     const lines = [

@@ -2,7 +2,7 @@ import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, Wol
 import { seat } from '../game/types';
 import { MockAgent } from './mockAgent';
 import { cleanSpeech, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
-import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
+import { ProviderError, type ReasoningLevel, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
 
 export interface AgentTelemetry {
   onCall?(info: { player: number; kind: string; ms: number; ok: boolean; error?: string }): void;
@@ -49,14 +49,14 @@ export class LLMAgent implements Agent {
     ];
   }
 
-  private async call(kind: string, msgs: ChatMessage[], maxTokens: number): Promise<string> {
+  private async call(kind: string, msgs: ChatMessage[], maxTokens: number, reasoning?: ReasoningLevel): Promise<string> {
     let lastErr = '';
     // back off on overload (e.g. local server 507 OOM under memory pressure)
     const delays = [0, 5000, 15000];
     for (let attempt = 0; attempt < delays.length; attempt++) {
       if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
       try {
-        const r = await this.queue.run(() => this.provider.chat(msgs, { maxTokens }));
+        const r = await this.queue.run(() => this.provider.chat(msgs, { maxTokens, reasoning }));
         this.telemetry.onCall?.({ player: this.id, kind, ms: r.ms, ok: true });
         if (r.content) return r.content;
         lastErr = '空回复';
@@ -79,7 +79,9 @@ export class LLMAgent implements Agent {
     const kind = req.kind === 'wolfChat' ? 'wolfChat' : req.purpose;
     while (true) {
       try {
-        const raw = await this.call(kind, this.messages(view, speechTask(req, view)), 2000);
+        // wolf chat is frequent and short: use the (cheaper) decision reasoning level
+        const reasoning = req.kind === 'wolfChat' ? this.provider.config.decisionReasoning : undefined;
+        const raw = await this.call(kind, this.messages(view, speechTask(req, view)), req.kind === 'wolfChat' ? 800 : 2000, reasoning);
         return cleanSpeech(raw, view, this.persona.name);
       } catch (e) {
         if (await this.shouldRetry(kind, (e as Error).message)) continue;
@@ -92,7 +94,7 @@ export class LLMAgent implements Agent {
     while (true) {
       let raw = '';
       try {
-        raw = await this.call(req.action, this.messages(view, targetTask(req, view)), 1500);
+        raw = await this.call(req.action, this.messages(view, targetTask(req, view)), 1000, this.provider.config.decisionReasoning);
       } catch (e) {
         if (await this.shouldRetry(req.action, (e as Error).message)) continue;
         return this.fallback.choose(req, view);

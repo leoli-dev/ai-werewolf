@@ -20,7 +20,7 @@ import { showRules } from './rules';
 const ROLE_DESC: Record<Role, string> = {
   werewolf: '每晚与狼队商量并投票杀人；白天伪装成好人。',
   villager: '没有技能，靠发言与投票找出狼人。',
-  seer: '每晚查验一人是好人还是狼人。',
+  seer: '每晚查验一人的具体身份。',
   witch: '金水救人、银水毒人，各一瓶。',
   hunter: '整局一枪：夜里或出局时可带走一人。',
   guard: '每晚守护一人免受狼刀，不可连守。',
@@ -39,6 +39,21 @@ const ACTION_TITLE: Record<TargetRequest['action'], string> = {
 
 type Tab = 'round' | 'all' | 'wolf' | 'private';
 
+/**
+ * Night step as the GM announces it publicly (role, not seat). Skips anything
+ * that would leak private state, e.g. whether the witch is being asked to save.
+ */
+function nightPublicLabel(label: string): string {
+  const wolfRound = label.match(/^狼队沟通 (\d+)\/(\d+)/);
+  if (wolfRound) return `狼人正在密谋（第 ${wolfRound[1]}/${wolfRound[2]} 轮）`;
+  if (label.startsWith('狼队')) return '狼人正在投票';
+  if (label.startsWith('预言家')) return '预言家正在查验';
+  if (label.startsWith('守卫')) return '守卫正在守护';
+  if (label.startsWith('猎人')) return '猎人正在考虑';
+  if (label.startsWith('女巫')) return '女巫正在用药';
+  return '夜幕下有人在行动';
+}
+
 export class GameUI {
   private hud!: HTMLElement;
   private roleCard!: HTMLElement;
@@ -54,6 +69,8 @@ export class GameUI {
   private playerFilter: number | null = null;
   private pendingTarget: { req: TargetRequest; select: (id: number) => void } | null = null;
   private lastPhase = '';
+  private clock!: HTMLElement;
+  private clockTimer = 0;
   private actorKey = '';
   private actorSince = 0;
   private actorTimer = 0;
@@ -98,14 +115,15 @@ export class GameUI {
     const ring = this.ringOf(id);
     if (id === this.me) return { text: ROLE_NAME[p.role], cls: 'me', ring };
     if (k === 'werewolf') return { text: '狼队友', cls: 'wolf' };
-    if (ring) return { text: ring === 'wolf' ? '查验：狼人' : '查验：好人', cls: ring, ring };
+    if (ring) return { text: `查验：${ROLE_NAME[this.game.state.seerChecks[id]]}`, cls: ring, ring };
     return null;
   }
 
   private ringOf(id: number): 'good' | 'wolf' | undefined {
     const me = this.game.players[this.me];
     if (me.role !== 'seer' && !this.godView) return undefined;
-    return this.game.state.seerChecks[id];
+    const r = this.game.state.seerChecks[id];
+    return r ? (teamOf(r) === 'wolf' ? 'wolf' : 'good') : undefined;
   }
 
   // ───────────────────────── build ─────────────────────────
@@ -130,7 +148,16 @@ export class GameUI {
     this.roster = h('div', { class: 'roster panel' });
     this.hud = h('div', { id: 'hud' }, this.roleCard, this.roster);
 
-    this.banner = h('div', { id: 'banner', class: 'panel' }, h('div', { class: 'phase' }, '准备中'), h('div', { class: 'actor' }));
+    this.clock = h('div', { class: 'clock', title: '本局已进行时间' }, '00:00');
+    this.banner = h('div', { id: 'banner', class: 'panel' }, this.clock, h('div', { class: 'phase' }, '准备中'), h('div', { class: 'actor' }));
+    const started = performance.now();
+    this.clockTimer = window.setInterval(() => {
+      const sec = Math.floor((performance.now() - started) / 1000);
+      const hh = Math.floor(sec / 3600);
+      const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+      const ss = String(sec % 60).padStart(2, '0');
+      this.clock.textContent = hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
+    }, 1000);
 
     const topright = h(
       'div',
@@ -228,6 +255,7 @@ export class GameUI {
 
   destroy() {
     clearInterval(this.actorTimer);
+    clearInterval(this.clockTimer);
     for (const el of [...this.root.children]) el.remove();
     this.labelsRoot.replaceChildren();
     this.stage.onFrame = undefined;
@@ -272,7 +300,7 @@ export class GameUI {
         this.actorSince = performance.now();
         const timer = h('span', { class: 'timer' });
         actorEl.replaceChildren(
-          hidden ? '夜幕下有人在行动' : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
+          hidden ? nightPublicLabel(s.actorLabel) : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
           h('span', { class: 'dots' }),
           s.actor === this.me ? '' : timer,
         );
@@ -295,7 +323,10 @@ export class GameUI {
     }
     this.renderRoster();
     this.renderItems();
-    if (s.phase === 'ended') this.showEnd(s);
+    if (s.phase === 'ended') {
+      clearInterval(this.clockTimer);
+      this.showEnd(s);
+    }
   }
 
   // ───────────────────────── roster / role card ─────────────────────────
@@ -447,7 +478,7 @@ export class GameUI {
       const parts = [
         b && b.until > now ? h('div', { class: 'bubble' }, b.text) : thinking ? h('div', { class: 'thinking' }, '...') : null,
         k && i !== this.me && !k.ring ? h('div', { class: `role-tag ${k.cls}` }, k.text) : null,
-        k?.ring ? h('div', { class: `role-tag ${k.ring}` }, k.ring === 'wolf' ? '狼人' : '好人') : null,
+        k?.ring ? h('div', { class: `role-tag ${k.ring}` }, ROLE_NAME[this.game.state.seerChecks[i] ?? pl.role]) : null,
         h('div', { class: 'plate' }, h('span', { class: `n ${k?.ring ? `ring-${k.ring}` : ''}` }, String(i + 1)), pl.name, pl.alive ? '' : ' ✝'),
       ];
       el.replaceChildren(...parts.filter((x): x is HTMLDivElement => x !== null));

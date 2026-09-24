@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: Settings = {
   playerName: '旅人',
   role: 'random',
   paceMs: 900,
-  wolfChatRounds: 5,
+  wolfChatRounds: 3,
   godView: false,
 };
 
@@ -56,7 +56,9 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
     const model = input(s.provider.model);
     model.setAttribute('list', 'model-list');
     const modelList = h('datalist', { id: 'model-list' });
-    const reasoning = h('select', {}, ...(['none', 'low', 'medium', 'high'] as ReasoningLevel[]).map((r) => h('option', { value: r, selected: r === s.provider.reasoning }, r))) as HTMLSelectElement;
+    const levels = ['none', 'low', 'medium', 'high'] as ReasoningLevel[];
+    const reasoning = h('select', {}, ...levels.map((r) => h('option', { value: r, selected: r === s.provider.reasoning }, r))) as HTMLSelectElement;
+    const decisionReasoning = h('select', {}, ...levels.map((r) => h('option', { value: r, selected: r === s.provider.decisionReasoning }, r))) as HTMLSelectElement;
     const proxy = h('input', { type: 'checkbox', checked: s.provider.useProxy }) as HTMLInputElement;
     const mode = h('select', {}, h('option', { value: 'llm', selected: s.mode === 'llm' }, 'LLM 驱动（OpenAI 兼容接口）'), h('option', { value: 'offline', selected: s.mode === 'offline' }, '离线规则 AI（无需模型，调试用）')) as HTMLSelectElement;
     const name = input(s.playerName);
@@ -77,13 +79,14 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
         apiKey: key.value.trim(),
         model: model.value.trim(),
         reasoning: reasoning.value as ReasoningLevel,
+        decisionReasoning: decisionReasoning.value as ReasoningLevel,
         useProxy: proxy.checked,
       },
       mode: mode.value as Settings['mode'],
       playerName: name.value.trim() || '旅人',
       role: role.value as Settings['role'],
       paceMs: Number(pace.value),
-      wolfChatRounds: Math.max(1, Math.min(5, Number(wolfRounds.value) || 5)),
+      wolfChatRounds: Math.max(1, Math.min(5, Number(wolfRounds.value) || 3)),
       godView: god.checked,
     });
 
@@ -118,7 +121,8 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
         h('label', {}, 'Base URL'), url,
         h('label', {}, 'API Key'), key,
         h('label', {}, '模型'), h('div', {}, model, modelList),
-        h('label', {}, '推理强度'), reasoning,
+        h('label', {}, '发言推理强度'), reasoning,
+        h('label', {}, '决策推理强度'), h('div', { class: 'inline' }, decisionReasoning, h('span', { class: 'sub', style: 'font-size:12px;white-space:nowrap' }, '投票 / 夜间技能 / 狼队沟通，调低可明显提速')),
         h('label', {}, '跨域代理'), h('label', { class: 'check' }, proxy, '经开发服务器转发（本地服务拒绝浏览器跨域时需要）'),
       ),
       h('div', { class: 'inline', style: 'margin-top:10px;display:flex;gap:8px' }, testBtn),
