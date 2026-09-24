@@ -46,16 +46,30 @@ describe('speechProgress', () => {
 
   it('shows the order, your position and how many are left', () => {
     const text = speechProgress({ kind: 'speech', purpose: 'discussion', day: 2, order, spoken: [4, 5, 7], first: 4, clockwise: true }, view(8));
-    expect(text).toContain('由 5号 开始顺时针发言');
-    expect(text).toContain('5号（已发言） → 6号（已发言） → 8号（已发言） → 9号（你） → 10号（未发言）');
-    expect(text).toContain('你是第 4 位（共 11 人），本轮已发言 3 人，还有 7 人未发言');
+    expect(text).toContain('由 5号 开始顺时针');
+    expect(text).toContain('号码从小到大，12号之后接1号');
+    expect(text).toContain('已发言（按顺序）：5号 → 6号 → 8号');
+    expect(text).toContain('轮到你：9号，第 4 位（共 11 人）');
+    expect(text).toContain('还没轮到（按发言顺序）：10号 → 11号 → 12号 → 1号 → 2号 → 3号 → 4号，共 7 人');
+    expect(text).toContain('不是沉默');
+    expect(text).not.toContain('未发言');
     expect(text).toContain('由 5号 做归纳总结');
   });
 
   it('tells the last speaker to wrap up', () => {
     const text = speechProgress({ kind: 'speech', purpose: 'discussion', day: 1, order, spoken: order.slice(0, 10), first: 4, clockwise: true }, view(3));
-    expect(text).toContain('还有 0 人未发言');
+    expect(text).toContain('在你之后没有人了');
     expect(text).toContain('最后一个发言');
+  });
+
+  it('explains counter-clockwise wrap-around (2 → 1 → 12 → … → 3)', () => {
+    const ccw = [1, 0, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2];
+    const all = Array.from({ length: 12 }, (_, id) => ({ id, name: `P${id + 1}`, alive: true }));
+    const v = { self: { id: 11 }, players: all } as unknown as PlayerView;
+    const text = speechProgress({ kind: 'speech', purpose: 'discussion', day: 1, order: ccw, spoken: [1, 0], first: 1, clockwise: false }, v);
+    expect(text).toContain('由 2号 开始逆时针（号码从大到小，1号之后接12号）发言');
+    expect(text).toContain('已发言（按顺序）：2号 → 1号');
+    expect(text).toMatch(/还没轮到（按发言顺序）：11号 → .* → 3号，共 9 人/);
   });
 
   it('covers tie defences', () => {

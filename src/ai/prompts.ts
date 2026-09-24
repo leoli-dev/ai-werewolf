@@ -140,7 +140,7 @@ ${req.round === 1
   const prior = todaysSpeakers(view);
   const respond = prior.length
     ? `今天在你之前已有 ${prior.map(seat).join('、')} 发言（见上方【今天的发言】）。你必须具体回应其中至少两人：点名并引用或概括他们说过的内容，说明你同意/反对的理由；同时结合昨夜的死亡情况、身份声明（例如谁跳了预言家、报了什么查验）和之前的投票。不要说泛泛的「XX发言奇怪」而不给出依据。`
-    : '你是今天第一个发言的人，还没有人说话。结合昨夜结果和之前几天的记录（如果有）开个头，给出你的初步判断，不要编造别人说过的话。';
+    : '你是今天第一个发言的人，其他人都还没轮到，不能拿「没发言」怀疑任何人。结合昨夜结果和之前几天的记录（如果有）开个头，给出你的初步判断，不要编造别人说过的话。';
   const progress = speechProgress(req, view);
   return `现在是第 ${req.day} 天（第 ${req.day} 轮白天）。${aliveList(view)}
 ${progress ? `${progress}\n` : ''}${what}
@@ -170,20 +170,31 @@ export function speechProgress(req: SpeechRequest, view: PlayerView): string {
   const done = order.filter((id) => spoken.has(id)).length;
 
   if (req.purpose === 'discussion') {
+    // Split instead of one arrow chain tagged 「未发言」: models read that as
+    // "stayed silent" and blamed seats whose turn had not come yet.
+    const before = order.filter((id) => spoken.has(id));
+    const after = order.slice(order.indexOf(me) + 1).filter((id) => alive.has(id) && !spoken.has(id));
     const pos = done + 1;
-    const left = total - pos;
-    const dir = req.clockwise === undefined ? '' : req.clockwise ? '顺时针' : '逆时针';
-    const opener = req.first !== undefined ? `由 ${seat(req.first)} 开始${dir}发言` : '';
+    const left = after.length;
+    const n = view.players.length;
+    const dir =
+      req.clockwise === undefined ? '' : req.clockwise ? `顺时针（号码从小到大，${n}号之后接1号）` : `逆时针（号码从大到小，1号之后接${n}号）`;
+    const opener = req.first !== undefined ? `由 ${seat(req.first)} 开始${dir}发言。` : '';
     const tip =
       left === 0
         ? '你是本轮最后一个发言的人：回应前面所有人的关键观点，给出明确的放逐建议。'
         : pos <= 2
-          ? `你发言较早，后面还有 ${left} 人没说：先亮出你的判断和怀疑对象，同时留意后面的人会怎么接。`
-          : `后面还有 ${left} 人没说。`;
+          ? '你发言较早：先亮出你的判断和怀疑对象，同时说明你想听后面哪些人怎么接。'
+          : '';
     const summary = req.first !== undefined && req.first !== me ? `全部发言结束后，由 ${seat(req.first)} 做归纳总结，然后投票。` : '全部发言结束后，由你（首位发言人）做归纳总结，然后投票。';
-    return `【本轮发言进度】${opener}：${line}
-你是第 ${pos} 位（共 ${total} 人），本轮已发言 ${done} 人，还有 ${left} 人未发言。${summary}
-${tip}`;
+    const waiting = left
+      ? `还没轮到（按发言顺序）：${after.map(seat).join(' → ')}，共 ${left} 人。他们只是还没轮到，不是沉默：不要说他们「没声音」「一直不说话」「在躲」，也不要评价他们的发言。`
+      : '在你之后没有人了。';
+    return `【本轮发言进度】${opener}
+已发言（按顺序）：${before.length ? before.map(seat).join(' → ') : '无，你是第一个'}
+轮到你：${seat(me)}，第 ${pos} 位（共 ${total} 人）
+${waiting}
+${summary}${tip ? `\n${tip}` : ''}`;
   }
   if (req.purpose === 'summary') {
     return `【本轮发言进度】${line}\n本轮 ${total} 人已全部发言完毕，你作为首位发言人做归纳总结，之后立即投票。`;
