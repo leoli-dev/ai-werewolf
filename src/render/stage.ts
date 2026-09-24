@@ -105,6 +105,12 @@ interface Tween {
 }
 
 const WALK_SPEED = 2.6;
+/** Camera limits: look around a little, never orbit freely. */
+const MAX_DRAG_YAW = 0.52; // ±30°
+const PITCH_MIN = 0.4;
+const PITCH_MAX = 0.8;
+const ZOOM_MIN = 0.8;
+const ZOOM_MAX = 1.25;
 
 export interface ScreenPos {
   x: number;
@@ -136,7 +142,10 @@ export class Stage {
   private camDist = 40;
   private yaw = 0;
   private pitch = 0.55;
-  private userYaw = 0;
+  /** Auto-framed heading (eased towards `yawGoal`). */
+  private baseYaw = 0;
+  /** Player drag offset, limited to a small arc around the framed view. */
+  private dragYaw = 0;
   private userZoom = 1;
 
   onFrame?: (positions: ScreenPos[]) => void;
@@ -235,10 +244,12 @@ export class Stage {
     this.yawGoal = Math.atan2(-p.x, -p.z);
     this.pitchGoal = 0.55;
     this.userZoom = 1;
+    this.dragReset = true;
   }
 
-  private yawGoal: number | null = null;
+  private yawGoal = 0;
   private pitchGoal: number | null = null;
+  private dragReset = false;
 
   // ── choreography ──
 
@@ -495,11 +506,11 @@ export class Stage {
       moved += Math.abs(dx) + Math.abs(dy);
       lx = e.clientX;
       ly = e.clientY;
-      this.userYaw -= dx * 0.005;
-      this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.003, 0.25, 1.1);
-      // manual control wins until the next speaker change
-      this.yawGoal = null;
+      // small town, fixed cast: only a gentle look-around, no free 360° orbit
+      this.dragYaw = THREE.MathUtils.clamp(this.dragYaw - dx * 0.004, -MAX_DRAG_YAW, MAX_DRAG_YAW);
+      this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.002, PITCH_MIN, PITCH_MAX);
       this.pitchGoal = null;
+      this.dragReset = false;
     });
     el.addEventListener('pointerup', (e) => {
       dragging = false;
@@ -509,7 +520,7 @@ export class Stage {
       'wheel',
       (e) => {
         e.preventDefault();
-        this.userZoom = THREE.MathUtils.clamp(this.userZoom * (1 + e.deltaY * 0.001), 0.45, 1.6);
+        this.userZoom = THREE.MathUtils.clamp(this.userZoom * (1 + e.deltaY * 0.001), ZOOM_MIN, ZOOM_MAX);
       },
       { passive: false },
     );
@@ -578,23 +589,26 @@ export class Stage {
     const focusedActor = this.focusId !== null ? this.actors[this.focusId] : null;
     const focusPos = focusedActor ? this.anchor(focusedActor) : null;
     const focused = focusPos ? { base: focusPos.clone().setY(0) } : null;
-    const tgt = focused ? focused.base.clone().setY(1.2).multiplyScalar(0.8) : new THREE.Vector3(0, 1, 0);
+    const tgt = focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0);
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
-    const dist = (focused ? 26 : 40) * this.userZoom;
+    const dist = (focused ? 34 : 40) * this.userZoom; // stay wide enough to keep most of the ring (and their bubbles) in view
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
     const sway = Math.sin(t * 0.05) * 0.12;
-    if (this.yawGoal !== null) {
-      // shortest way round (the slow idle sway is part of the final angle)
+    {
+      // ease the framed heading the shortest way round (the idle sway is part of the final angle)
       const want = this.yawGoal - sway;
-      const diff = Math.atan2(Math.sin(want - this.userYaw), Math.cos(want - this.userYaw));
-      this.userYaw += diff * Math.min(1, dt * 2.2);
-      if (Math.abs(diff) < 0.002) this.yawGoal = null;
+      const diff = Math.atan2(Math.sin(want - this.baseYaw), Math.cos(want - this.baseYaw));
+      this.baseYaw += diff * Math.min(1, dt * 2.2);
+    }
+    if (this.dragReset) {
+      this.dragYaw += (0 - this.dragYaw) * Math.min(1, dt * 2.2);
+      if (Math.abs(this.dragYaw) < 0.002) this.dragReset = false;
     }
     if (this.pitchGoal !== null) {
       this.pitch += (this.pitchGoal - this.pitch) * Math.min(1, dt * 2.2);
       if (Math.abs(this.pitchGoal - this.pitch) < 0.002) this.pitchGoal = null;
     }
-    this.yaw = this.userYaw + sway;
+    this.yaw = this.baseYaw + this.dragYaw + sway;
     const cp = this.pitch;
     this.camera.position.set(
       this.camTarget.x + Math.sin(this.yaw) * Math.cos(cp) * this.camDist,

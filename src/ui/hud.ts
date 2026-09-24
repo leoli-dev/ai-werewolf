@@ -40,6 +40,17 @@ const ACTION_TITLE: Record<TargetRequest['action'], string> = {
 
 type Tab = 'round' | 'all' | 'wolf' | 'private';
 
+/** One distinct bubble colour per seat (12 hues 30° apart), reused in the chat log. */
+export function bubbleColor(id: number) {
+  const hue = [0, 30, 52, 90, 140, 172, 196, 218, 248, 276, 302, 330][id % 12];
+  return { bg: `hsl(${hue} 60% 87%)`, edge: `hsl(${hue} 50% 32%)` };
+}
+
+function bubbleStyle(id: number) {
+  const c = bubbleColor(id);
+  return `background:${c.bg};border-color:${c.edge};box-shadow:2px 2px 0 ${c.edge}`;
+}
+
 /** Public night-step names (GM announces the turn, never what the role does). */
 const NIGHT_STEP_NAME: Record<NightStep, string> = {
   seer: '预言家轮',
@@ -59,7 +70,8 @@ export class GameUI {
   private chatFilter!: HTMLElement;
   private action!: HTMLElement;
   private labelEls: HTMLElement[] = [];
-  private bubbles = new Map<number, { text: string; until: number }>();
+  private bubbles = new Map<number, { text: string; seq: number }>();
+  private bubbleSeq = 0;
   private tab: Tab = 'round';
   private playerFilter: number | null = null;
   private pendingTarget: { req: TargetRequest; select: (id: number) => void } | null = null;
@@ -301,10 +313,9 @@ export class GameUI {
     }
     if (!this.canSee(e)) return;
     if ((e.type === 'speech' || e.type === 'wolfChat') && e.speaker !== undefined) {
-      // only the latest speaker keeps a bubble: the previous one disappears once
-      // the next person has finished speaking (i.e. their speech arrives)
-      this.bubbles.clear();
-      this.bubbles.set(e.speaker, { text: e.text, until: Infinity });
+      // every speaker keeps their latest words over their head (day: until everyone
+      // goes home at nightfall; wolf chat: until the pack is back indoors)
+      this.bubbles.set(e.speaker, { text: e.text, seq: ++this.bubbleSeq });
     }
     if (this.matches(e)) this.appendMsg(e);
     if (e.type === 'private' || e.type === 'gm' || e.type === 'death') this.renderRoster();
@@ -390,7 +401,8 @@ export class GameUI {
   /** Map engine state changes onto scene animation (howls, exiles). */
   private choreograph(s: GameState) {
     // night ↔ day: wipe leftover bubbles from the previous part of the round
-    const bubbleScope = `${s.day}:${s.phase === 'night' ? 'night' : 'day'}`;
+    // (the wolf-chat bubbles are their own scope, gone once the wolf turn ends)
+    const bubbleScope = `${s.day}:${s.phase === 'night' ? `night:${s.nightStep === 'wolves' ? 'wolves' : ''}` : 'day'}`;
     if (bubbleScope !== this.bubbleScope) {
       this.bubbleScope = bubbleScope;
       this.bubbles.clear();
@@ -546,7 +558,7 @@ export class GameUI {
   private appendMsg(e: GameEvent, scroll = true) {
     const P = this.game.players;
     let el: HTMLElement;
-    const who = (id: number) => h('span', { class: 'who' }, h('span', { class: 'n' }, String(id + 1)), P[id].name);
+    const who = (id: number) => h('span', { class: 'who' }, h('span', { class: 'n', style: `border-color:${bubbleColor(id).edge};background:${bubbleColor(id).bg};color:#221a14` }, String(id + 1)), P[id].name);
     switch (e.type) {
       case 'speech': {
         const kind = { discussion: '', summary: '总结', lastWords: '遗言', defense: '正名' }[e.speechKind ?? 'discussion'];
@@ -567,7 +579,6 @@ export class GameUI {
   // ───────────────────────── labels ─────────────────────────
 
   private placeLabels(pos: ScreenPos[]) {
-    const now = performance.now();
     const actor = this.visibleActor();
     pos.forEach((p, i) => {
       const el = this.labelEls[i];
@@ -579,12 +590,15 @@ export class GameUI {
       const k = this.knownOf(i);
       const b = this.bubbles.get(i);
       const thinking = actor === i;
-      const key = `${pl.alive}|${k?.text}|${k?.ring}|${b && b.until > now ? b.text : ''}|${thinking}`;
+      // newest words on top; hovering a bubble brings it to the front (CSS)
+      el.style.zIndex = String(b ? 10 + b.seq : 1);
+      const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? b.text : ''}|${thinking}`;
       if (el.dataset.key === key) return;
       el.dataset.key = key;
       el.className = `label ${pl.alive ? '' : 'dead'} ${i === this.me ? 'me' : ''}`;
       const parts = [
-        b && b.until > now ? h('div', { class: 'bubble' }, b.text) : thinking ? h('div', { class: 'thinking' }, '...') : null,
+        b ? h('div', { class: 'bubble', style: bubbleStyle(i) }, b.text) : null,
+        thinking ? h('div', { class: 'thinking' }, '...') : null,
         k && i !== this.me && !k.ring ? h('div', { class: `role-tag ${k.cls}` }, k.text) : null,
         k?.ring ? h('div', { class: `role-tag ${k.ring}` }, ROLE_NAME[this.game.state.seerChecks[i] ?? pl.role]) : null,
         h('div', { class: 'plate' }, h('span', { class: `n ${k?.ring ? `ring-${k.ring}` : ''}` }, String(i + 1)), pl.name, pl.alive ? '' : ' ✝'),
