@@ -314,7 +314,8 @@ export class GameUI {
     const night = s.phase === 'night';
     this.stage.setNight(night);
     audio.setNight(night);
-    this.stage.focus(s.actor);
+    // never point the camera at a hidden night actor (it would reveal their role)
+    this.stage.focus(this.visibleActor());
     this.choreograph(s);
     const phaseName: Record<string, string> = {
       setup: '准备中',
@@ -329,30 +330,31 @@ export class GameUI {
     phaseEl.textContent = phaseName[s.phase];
     phaseEl.className = `phase ${night ? 'night' : ''}`;
     const actorEl = this.banner.querySelector('.actor')!;
-    if (s.actor !== null) {
-      // at night only reveal who acts if it is you (or god view)
-      const hidden = night && s.actor !== this.me && !this.godView;
-      const actorKey = `${s.actor}:${s.actorLabel}`;
-      if (actorKey !== this.actorKey) {
-        this.actorKey = actorKey;
+    const secret = night && !this.godView;
+    const mine = s.actor === this.me;
+    // At night the banner only shows the public turn and how long it has lasted —
+    // the timer restarts per turn, never per actor (per-actor restarts would leak
+    // e.g. whether the witch was asked to save someone). Your own action is shown.
+    const actorKey = secret && !mine
+      ? (s.nightStep ? `step:${s.day}:${s.nightStep}` : '')
+      : s.actor !== null ? `${s.actor}:${s.actorLabel}` : '';
+    if (actorKey !== this.actorKey) {
+      this.actorKey = actorKey;
+      clearInterval(this.actorTimer);
+      if (!actorKey) actorEl.textContent = '';
+      else {
         this.actorSince = performance.now();
         const timer = h('span', { class: 'timer' });
         actorEl.replaceChildren(
-          hidden ? '夜幕下' : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
+          secret && !mine ? '夜幕下' : `${seat(s.actor!)} ${this.game.players[s.actor!].name} · ${s.actorLabel}`,
           h('span', { class: 'dots' }),
-          s.actor === this.me ? '' : timer,
+          mine ? '' : timer,
         );
-        clearInterval(this.actorTimer);
         this.actorTimer = window.setInterval(() => {
           const sec = Math.floor((performance.now() - this.actorSince) / 1000);
           timer.textContent = sec >= 3 ? ` ${sec}s` : '';
         }, 500);
       }
-      if (hidden) this.stage.focus(null);
-    } else {
-      this.actorKey = '';
-      clearInterval(this.actorTimer);
-      actorEl.textContent = '';
     }
     if (s.nightStep !== this.lastStep) {
       this.lastStep = s.nightStep;
