@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER, OpenAICompatibleProvider, type ProviderConfig, type ReasoningLevel } from '../ai/provider';
+import { OpenAICompatibleProvider, type ProviderConfig, type ReasoningLevel } from '../ai/provider';
+import { envProvider } from '../config';
 import { ROLE_NAME, type Role } from '../game/types';
 import { h } from './dom';
 
@@ -13,10 +14,11 @@ export interface Settings {
 }
 
 const KEY = 'ai-werewolf:settings:v1';
-const RETIRED_DEFAULT_MODELS = ['mtplx-flash-next-optimized-speed'];
 
-export const DEFAULT_SETTINGS: Settings = {
-  provider: DEFAULT_PROVIDER,
+/** Game preferences persist in the browser; the LLM connection always comes from `.env`. */
+type Prefs = Omit<Settings, 'provider'>;
+
+const DEFAULT_PREFS: Prefs = {
   mode: 'llm',
   playerName: '旅人',
   role: 'random',
@@ -26,24 +28,23 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export function loadSettings(): Settings {
+  let prefs = DEFAULT_PREFS;
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) {
-      const s = JSON.parse(raw);
-      const provider = { ...DEFAULT_PROVIDER, ...s.provider };
-      // models we used to ship as default: move saved settings onto the current default
-      if (RETIRED_DEFAULT_MODELS.includes(provider.model)) provider.model = DEFAULT_PROVIDER.model;
-      return { ...DEFAULT_SETTINGS, ...s, provider };
+      const { provider: _ignored, ...saved } = JSON.parse(raw);
+      prefs = { ...DEFAULT_PREFS, ...saved };
     }
   } catch {
     /* ignore */
   }
-  return structuredClone(DEFAULT_SETTINGS);
+  return { ...prefs, provider: envProvider().config };
 }
 
 function saveSettings(s: Settings) {
+  const { provider: _ignored, ...prefs } = s;
   try {
-    localStorage.setItem(KEY, JSON.stringify(s));
+    localStorage.setItem(KEY, JSON.stringify(prefs));
   } catch {
     /* ignore */
   }
@@ -56,7 +57,8 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
     const input = (value: string, type = 'text') => h('input', { type, value }) as HTMLInputElement;
     const url = input(s.provider.baseUrl);
     const key = input(s.provider.apiKey, 'password');
-    key.placeholder = '本地服务可留空';
+    const env = envProvider();
+    key.placeholder = env.keyOnServer ? '已在 .env 配置（由开发服务器注入，不下发浏览器）' : '.env 未配置 LLM_API_KEY；本地服务可留空';
     const model = input(s.provider.model);
     model.setAttribute('list', 'model-list');
     const modelList = h('datalist', { id: 'model-list' });
@@ -99,17 +101,21 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
       testBtn.disabled = true;
       result.className = 'test-result';
       result.textContent = '连接中…（本地推理首个请求可能较慢）';
+      let switched = '';
       // if the server serves exactly one model and it isn't the one typed in, switch to it first
       try {
         const served = await new OpenAICompatibleProvider(read().provider).listModels();
-        if (served.length === 1 && !served.includes(model.value.trim())) model.value = served[0];
+        if (served.length === 1 && !served.includes(model.value.trim())) {
+          switched = `.env 里的模型「${model.value.trim()}」服务端没有，本次临时改用「${served[0]}」，请更新 LLM_MODEL。`;
+          model.value = served[0];
+        }
       } catch {
         /* test() below reports connection problems */
       }
       const r = await new OpenAICompatibleProvider(read().provider).test();
       if (r.models?.length) modelList.replaceChildren(...r.models.map((m) => h('option', { value: m })));
       result.className = `test-result ${r.ok ? 'ok' : 'err'}`;
-      result.textContent = (r.ok ? '✓ ' : '✗ ') + r.message + (r.models?.length ? `（可用模型：${r.models.join('、')}）` : '');
+      result.textContent = (r.ok ? '✓ ' : '✗ ') + r.message + (r.models?.length ? `（可用模型：${r.models.join('、')}）` : '') + (switched ? ` ${switched}` : '');
       testBtn.disabled = false;
     };
 
@@ -122,6 +128,13 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
       h('h1', {}, '雾镇狼人夜'),
       h('div', { class: 'sub' }, '12 人屠边局 · 你与 11 位 AI 镇民 · 天黑请闭眼'),
       h('h2', {}, 'AI 引擎'),
+      h(
+        'p',
+        { class: env.missing.length ? 'test-result err' : 'sub' },
+        env.missing.length
+          ? `.env 缺少 ${env.missing.join('、')}（参考 .env.example），请补全后刷新页面。`
+          : '默认值读取自项目根目录的 .env；在这里修改只对本次启动有效，长期修改请编辑 .env。',
+      ),
       h(
         'div',
         { class: 'form' },

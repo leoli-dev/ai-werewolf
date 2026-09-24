@@ -3,10 +3,29 @@
 sequentially (serial, as designed: GM asks one at a time), plus 4 briefer
 GM-query calls. Measures per-call latency and throughput against an
 OpenAI-compatible endpoint. Usage: python3 mtplx_round_bench.py [n_rounds]"""
-import json, time, sys, urllib.request
+import json, os, time, sys, urllib.request
 
-BASE = "http://127.0.0.1:8001/v1/chat/completions"
-MODEL = "mtplx-qwen38-27b-optimized-speed"
+def load_env():
+    """Same settings as the game: .env (falls back to the committed .env.example)."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    path = os.path.join(root, ".env")
+    if not os.path.exists(path):
+        path = os.path.join(root, ".env.example")
+    env = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
+    env.update({k: v for k, v in os.environ.items() if k.startswith("LLM_")})
+    return env
+
+ENV = load_env()
+BASE = ENV["LLM_BASE_URL"].rstrip("/") + "/chat/completions"
+MODEL = ENV["LLM_MODEL"]
+API_KEY = ENV.get("LLM_API_KEY", "")
+REASONING = ENV.get("LLM_REASONING", "medium")
 
 ROLES = ["预言家", "女巫", "猎人", "守卫", "狼人", "狼人", "狼人", "狼人",
          "村民", "村民", "村民", "村民"]
@@ -26,10 +45,12 @@ def call(i, role, tlen, max_tokens):
     body = json.dumps({
         "model": MODEL, "messages": make_messages(i, role, tlen),
         "max_tokens": max_tokens, "temperature": 1.0,
-        "reasoning_effort": "medium", "stream": False,
+        "reasoning_effort": REASONING, "stream": False,
     }).encode()
-    req = urllib.request.Request(BASE, data=body,
-        headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+    req = urllib.request.Request(BASE, data=body, headers=headers)
     t0 = time.time()
     with urllib.request.urlopen(req, timeout=600) as r:
         data = json.loads(r.read())

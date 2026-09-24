@@ -14,16 +14,6 @@ export interface ProviderConfig {
   timeoutMs: number;
 }
 
-export const DEFAULT_PROVIDER: ProviderConfig = {
-  baseUrl: 'http://127.0.0.1:8001/v1',
-  apiKey: '',
-  model: 'mtplx-qwen38-27b-optimized-speed',
-  reasoning: 'medium',
-  decisionReasoning: 'low',
-  useProxy: true,
-  timeoutMs: 180_000,
-};
-
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;

@@ -12,14 +12,21 @@ npm test           # 引擎规则 + prompt 解析测试
 npm run typecheck
 ```
 
-启动后先在设置页配置 AI 引擎并点「测试连接」：
+## LLM 配置（`.env`）
 
-| 字段 | 默认 |
+连接信息统一放在项目根目录的 `.env`，游戏、开发服务器代理、`tools/llm_selfplay.ts`、`tools/mtplx_round_bench.py` 都从这里读取。
+`.env` 不进 git；进 git 的版本是 `.env.example`（当前在用的配置，key 留空）。首次 `npm run dev` 时若没有 `.env` 会自动从 `.env.example` 复制一份。
+
+| 变量 | 说明 |
 |---|---|
-| Base URL | `http://127.0.0.1:8001/v1`（本地 MTPLX） |
-| 模型 | `mtplx-qwen38-27b-optimized-speed` |
-| 推理强度 | `medium`（作为 `reasoning_effort` 传递） |
-| 跨域代理 | 开：浏览器请求 `/__llm/*`，由 Vite 开发服务器转发到 Base URL（MTPLX 拒绝浏览器跨域） |
+| `LLM_BASE_URL` | OpenAI 兼容地址，默认本地 MTPLX `http://127.0.0.1:8001/v1` |
+| `LLM_MODEL` | 模型 id（`GET /v1/models` 列出的名字） |
+| `LLM_API_KEY` | 可选；只留在开发服务器，由代理加到请求头，不会打包进浏览器代码 |
+| `LLM_REASONING` / `LLM_DECISION_REASONING` | 发言 / 投票·夜间技能·狼队沟通的推理强度：none·low·medium·high |
+| `LLM_USE_PROXY` | 浏览器经 Vite 开发服务器转发（本地服务拒绝跨域时需要） |
+| `LLM_TIMEOUT_MS` | 单次请求超时 |
+
+改完 `.env` 后 Vite 会自动重启，刷新页面生效。设置页里的修改只对本次启动有效。
 
 「离线规则 AI」模式无需模型，用于调试 UI / 流程。
 

@@ -5,13 +5,21 @@
  */
 import { LLMAgent } from '../src/ai/llmAgent';
 import { PERSONAS } from '../src/ai/prompts';
-import { DEFAULT_PROVIDER, OpenAICompatibleProvider, SerialQueue } from '../src/ai/provider';
+import { existsSync } from 'node:fs';
+import { OpenAICompatibleProvider, SerialQueue } from '../src/ai/provider';
+import { envProvider } from '../src/config';
 import { Game } from '../src/game/game';
 import { ROLE_NAME, seat } from '../src/game/types';
 
 const seed = Number(process.argv[2] ?? 1);
 const rounds = Number(process.argv[3] ?? 5);
-const provider = new OpenAICompatibleProvider({ ...DEFAULT_PROVIDER, useProxy: false });
+// same connection settings as the game: .env (falls back to the committed .env.example)
+process.loadEnvFile(existsSync('.env') ? '.env' : '.env.example');
+const env = envProvider();
+if (env.missing.length) throw new Error(`.env 缺少 ${env.missing.join(', ')}`);
+// node talks to the server directly (no browser CORS), with the key from .env
+const provider = new OpenAICompatibleProvider({ ...env.config, useProxy: false });
+console.log(`# ${env.config.model} @ ${env.config.baseUrl} (reasoning ${env.config.reasoning} / decisions ${env.config.decisionReasoning})`);
 const queue = new SerialQueue();
 const stats: Record<string, number[]> = {};
 let failures = 0;
