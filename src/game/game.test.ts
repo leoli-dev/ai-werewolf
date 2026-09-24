@@ -160,6 +160,33 @@ describe('Game engine', () => {
     expect(humanRounds).toEqual([1, 2]);
   });
 
+  it('tells each day speaker the round order and who has already spoken', async () => {
+    const g = new Game({ names, humanSeat: -1, seed: 11, wolfChatRounds: 1 });
+    const seen: { id: number; order: number[]; spoken: number[]; purpose: string }[] = [];
+    const agent = (id: number): Agent => ({
+      speak: async (r) => {
+        if (r.kind === 'speech' && r.day === 1) seen.push({ id, order: r.order ?? [], spoken: r.spoken ?? [], purpose: r.purpose });
+        return '我是好人';
+      },
+      choose: async (r) => {
+        if (r.day > 1) throw new Error('stop');
+        return r.allowSkip ? null : r.candidates[0];
+      },
+    });
+    g.setAgents(names.map((_, i) => agent(i)));
+    await g.run().catch(() => {});
+    const disc = seen.filter((x) => x.purpose === 'discussion');
+    expect(disc.length).toBeGreaterThan(5);
+    disc.forEach((x, k) => {
+      expect(x.order).toEqual(disc[0].order); // one shared order for the round
+      expect(x.spoken).toEqual(disc.slice(0, k).map((d) => d.id)); // exactly the earlier speakers
+      expect(x.order[k]).toBe(x.id); // speaking at its own position
+    });
+    const summary = seen.find((x) => x.purpose === 'summary')!;
+    expect(summary.id).toBe(disc[0].id);
+    expect(summary.spoken).toHaveLength(disc.length);
+  });
+
   it('guard blocks the wolf kill but not poison', async () => {
     const g = new Game({ names, humanSeat: -1, seed: 7, wolfChatRounds: 1 });
     const villager = g.players.find((p) => p.role === 'villager')!.id;

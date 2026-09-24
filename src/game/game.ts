@@ -14,6 +14,7 @@ import {
   type PlayerView,
   type Role,
   type SpeechKind,
+  type SpeechOrder,
   type TargetAction,
   type TargetRequest,
   type Visibility,
@@ -490,8 +491,8 @@ export class Game {
     return false;
   }
 
-  private async speech(id: number, purpose: SpeechKind, label: string) {
-    const text = (await this.ask(id, { kind: 'speech', purpose, day: this.state.day }, label)) as string;
+  private async speech(id: number, purpose: SpeechKind, label: string, seq: SpeechOrder = {}) {
+    const text = (await this.ask(id, { kind: 'speech', purpose, day: this.state.day, ...seq }, label)) as string;
     this.emit('speech', text, { kind: 'public' }, { speaker: id, speechKind: purpose, data: this.lastSpeechFallback ? { fallback: true } : undefined });
     await this.pace();
   }
@@ -510,13 +511,15 @@ export class Game {
     const order = circularOrder(alive, first, clockwise);
     this.gm(`第 ${day} 天发言开始：由 ${seat(first)} 开始，${clockwise ? '顺时针' : '逆时针'}发言。`);
     await this.pace();
+    const spoken: number[] = [];
     for (const id of order) {
       if (!this.players[id].alive) continue;
-      await this.speech(id, 'discussion', '发言中');
+      await this.speech(id, 'discussion', '发言中', { order, spoken: [...spoken], first, clockwise });
+      spoken.push(id);
     }
     if (this.players[first].alive) {
       this.gm(`请首位发言的 ${seat(first)} 做归纳总结。`);
-      await this.speech(first, 'summary', '归纳总结');
+      await this.speech(first, 'summary', '归纳总结', { order, spoken, first, clockwise });
     }
 
     // 投票
@@ -525,7 +528,11 @@ export class Game {
     let out = await this.voteRound(this.aliveIds(), 'vote');
     if (out.length > 1) {
       this.gm(`${out.map(seat).join('、')} 平票，请平票玩家依次发言为自己正名。`);
-      for (const id of out) await this.speech(id, 'defense', '平票正名');
+      const defended: number[] = [];
+      for (const id of out) {
+        await this.speech(id, 'defense', '平票正名', { order: out, spoken: [...defended] });
+        defended.push(id);
+      }
       this.gm('请在平票玩家中再次投票。');
       out = await this.voteRound(out, 'revote');
       if (out.length > 1) {

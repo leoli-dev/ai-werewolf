@@ -83,7 +83,17 @@ export interface SpeechRequest {
   kind: 'speech';
   purpose: SpeechKind;
   day: number;
+  /** Speaking order of this sequence (discussion: the day's round; defense: the tied players). */
+  order?: number[];
+  /** Who in `order` has already spoken in this sequence. */
+  spoken?: number[];
+  /** Discussion only: who opened the round and in which direction it goes. */
+  first?: number;
+  clockwise?: boolean;
 }
+
+/** Where a speaker stands in the current speaking sequence. */
+export type SpeechOrder = Pick<SpeechRequest, 'order' | 'spoken' | 'first' | 'clockwise'>;
 
 export interface WolfChatRequest {
   kind: 'wolfChat';

@@ -141,10 +141,58 @@ ${req.round === 1
   const respond = prior.length
     ? `今天在你之前已有 ${prior.map(seat).join('、')} 发言（见上方【今天的发言】）。你必须具体回应其中至少两人：点名并引用或概括他们说过的内容，说明你同意/反对的理由；同时结合昨夜的死亡情况、身份声明（例如谁跳了预言家、报了什么查验）和之前的投票。不要说泛泛的「XX发言奇怪」而不给出依据。`
     : '你是今天第一个发言的人，还没有人说话。结合昨夜结果和之前几天的记录（如果有）开个头，给出你的初步判断，不要编造别人说过的话。';
-  return `现在是第 ${req.day} 天。${aliveList(view)}
-${what}
+  const progress = speechProgress(req, view);
+  return `现在是第 ${req.day} 天（第 ${req.day} 轮白天）。${aliveList(view)}
+${progress ? `${progress}\n` : ''}${what}
 ${respond}
 200 字以内，直接输出发言内容。`;
+}
+
+/**
+ * 本轮发言进度: the full speaking order with who has spoken, the speaker's own
+ * position, and how many are still to come — so the AI can pace its speech
+ * (open with a view early, wrap up and push a vote late).
+ */
+export function speechProgress(req: SpeechRequest, view: PlayerView): string {
+  const order = req.order;
+  if (!order?.length) return '';
+  const me = view.self.id;
+  const spoken = new Set(req.spoken ?? []);
+  const alive = new Set(view.players.filter((p) => p.alive).map((p) => p.id));
+  const tag = (id: number) => {
+    if (id === me) return `${seat(id)}（你）`;
+    if (spoken.has(id)) return `${seat(id)}（已发言）`;
+    if (!alive.has(id)) return `${seat(id)}（已出局）`;
+    return `${seat(id)}（未发言）`;
+  };
+  const line = order.map(tag).join(' → ');
+  const total = order.filter((id) => alive.has(id) || spoken.has(id)).length;
+  const done = order.filter((id) => spoken.has(id)).length;
+
+  if (req.purpose === 'discussion') {
+    const pos = done + 1;
+    const left = total - pos;
+    const dir = req.clockwise === undefined ? '' : req.clockwise ? '顺时针' : '逆时针';
+    const opener = req.first !== undefined ? `由 ${seat(req.first)} 开始${dir}发言` : '';
+    const tip =
+      left === 0
+        ? '你是本轮最后一个发言的人：回应前面所有人的关键观点，给出明确的放逐建议。'
+        : pos <= 2
+          ? `你发言较早，后面还有 ${left} 人没说：先亮出你的判断和怀疑对象，同时留意后面的人会怎么接。`
+          : `后面还有 ${left} 人没说。`;
+    const summary = req.first !== undefined && req.first !== me ? `全部发言结束后，由 ${seat(req.first)} 做归纳总结，然后投票。` : '全部发言结束后，由你（首位发言人）做归纳总结，然后投票。';
+    return `【本轮发言进度】${opener}：${line}
+你是第 ${pos} 位（共 ${total} 人），本轮已发言 ${done} 人，还有 ${left} 人未发言。${summary}
+${tip}`;
+  }
+  if (req.purpose === 'summary') {
+    return `【本轮发言进度】${line}\n本轮 ${total} 人已全部发言完毕，你作为首位发言人做归纳总结，之后立即投票。`;
+  }
+  if (req.purpose === 'defense') {
+    const left = total - done - 1;
+    return `【平票正名进度】平票玩家：${order.map(seat).join('、')}。${line}\n${left > 0 ? `你说完后还有 ${left} 位平票玩家正名，然后全体在平票玩家中再投一次。` : '你是最后一位正名的，说完后全体在平票玩家中再投一次。'}`;
+  }
+  return '';
 }
 
 const ACTION_TEXT: Record<TargetRequest['action'], string> = {
