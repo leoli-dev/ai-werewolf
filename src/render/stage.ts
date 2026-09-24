@@ -219,8 +219,25 @@ export class Stage {
   }
 
   focus(id: number | null) {
+    if (id !== null && id !== this.focusId) this.reframe(id);
     this.focusId = id;
   }
+
+  /**
+   * Swing the camera round to look at `id` from the plaza side, so only their own
+   * house is behind them and no building blocks the view. Resets manual pitch/zoom.
+   */
+  private reframe(id: number) {
+    const a = this.actors[id];
+    const p = this.anchor(a) ?? a.base;
+    // camera offset direction is (sin yaw, cos yaw): point it from the actor towards the centre
+    this.yawGoal = Math.atan2(-p.x, -p.z);
+    this.pitchGoal = 0.55;
+    this.userZoom = 1;
+  }
+
+  private yawGoal: number | null = null;
+  private pitchGoal: number | null = null;
 
   // ── choreography ──
 
@@ -465,6 +482,9 @@ export class Stage {
       ly = e.clientY;
       this.userYaw -= dx * 0.005;
       this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.003, 0.25, 1.1);
+      // manual control wins until the next speaker change
+      this.yawGoal = null;
+      this.pitchGoal = null;
     });
     el.addEventListener('pointerup', (e) => {
       dragging = false;
@@ -547,7 +567,19 @@ export class Stage {
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
     const dist = (focused ? 26 : 40) * this.userZoom;
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
-    this.yaw = this.userYaw + Math.sin(t * 0.05) * 0.12;
+    const sway = Math.sin(t * 0.05) * 0.12;
+    if (this.yawGoal !== null) {
+      // shortest way round (the slow idle sway is part of the final angle)
+      const want = this.yawGoal - sway;
+      const diff = Math.atan2(Math.sin(want - this.userYaw), Math.cos(want - this.userYaw));
+      this.userYaw += diff * Math.min(1, dt * 2.2);
+      if (Math.abs(diff) < 0.002) this.yawGoal = null;
+    }
+    if (this.pitchGoal !== null) {
+      this.pitch += (this.pitchGoal - this.pitch) * Math.min(1, dt * 2.2);
+      if (Math.abs(this.pitchGoal - this.pitch) < 0.002) this.pitchGoal = null;
+    }
+    this.yaw = this.userYaw + sway;
     const cp = this.pitch;
     this.camera.position.set(
       this.camTarget.x + Math.sin(this.yaw) * Math.cos(cp) * this.camDist,
