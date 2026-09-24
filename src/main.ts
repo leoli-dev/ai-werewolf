@@ -34,6 +34,7 @@ stage.sounds = {
   flap: (v) => audio.batFlap(v),
   caw: (v) => audio.caw(v),
   thunder: (d) => audio.thunder(d),
+  explosion: (v, big) => audio.explosion(v, big),
 };
 
 // sound settings apply everywhere (title screen included)

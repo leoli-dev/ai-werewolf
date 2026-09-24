@@ -469,6 +469,44 @@ export class AudioEngine {
     o.stop(t + 0.6);
   }
 
+  /** A wolf's self-destruct: `big` is the house going up (boom, long rumble, falling debris). */
+  explosion(vol = 1, big = true, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const ctx = this.ctx!;
+    // the crack
+    this.burst(this.sfx, t, 'lowpass', big ? 2600 : 1800, 0.6, (big ? 0.95 : 0.6) * vol, 0.002, big ? 0.6 : 0.35, 0.4);
+    // body: a pitch-dropping thump
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(big ? 90 : 120, t);
+    o.frequency.exponentialRampToValueAtTime(big ? 28 : 45, t + (big ? 1.2 : 0.5));
+    const g = this.env(t, 0.005, (big ? 1 : 0.6) * vol, big ? 1.6 : 0.6);
+    o.connect(g);
+    this.out(g, this.sfx, 0.4);
+    o.start(t);
+    o.stop(t + 2);
+    if (!big) return;
+    // long rolling rumble
+    const s = this.noiseSrc(true);
+    const f = this.filter('lowpass', 220, 0.8);
+    const rg = ctx.createGain();
+    rg.gain.setValueAtTime(0.0001, t);
+    rg.gain.linearRampToValueAtTime(0.9 * vol, t + 0.1);
+    rg.gain.linearRampToValueAtTime(0.5 * vol, t + 1.5);
+    rg.gain.exponentialRampToValueAtTime(0.0001, t + 6);
+    f.frequency.setValueAtTime(420, t);
+    f.frequency.exponentialRampToValueAtTime(90, t + 5);
+    s.connect(f).connect(rg);
+    this.out(rg, this.sfx, 0.5);
+    s.start(t);
+    s.stop(t + 6.1);
+    // debris raining down
+    for (let k = 0; k < 14; k++) {
+      this.burst(this.sfx, t + 0.9 + Math.random() * 2.2, 'bandpass', 900 + Math.random() * 2600, 2.5, (0.12 + Math.random() * 0.16) * vol, 0.002, 0.05 + Math.random() * 0.08);
+    }
+  }
+
   seal(vol = 1, delay = 0) {
     const t = this.now(delay);
     if (t < 0) return;

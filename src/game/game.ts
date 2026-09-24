@@ -60,7 +60,7 @@ export interface GameState {
 export type NightStep = 'seer' | 'guard' | 'wolves' | 'hunter' | 'witch';
 
 /** Moments where the GM waits for the scene to finish animating. */
-export type SceneCue = 'nightfall' | 'wolvesOut' | 'wolvesIn' | 'dawn';
+export type SceneCue = 'nightfall' | 'wolvesOut' | 'wolvesIn' | 'dawn' | 'explode';
 
 export interface GameHooks {
   onEvent?(e: GameEvent): void;
@@ -603,8 +603,9 @@ export class Game {
     if (explode) {
       this.gm(`${seat(id)} ${this.players[id].name} 自爆，身份是狼人！本轮剩余发言与投票取消，直接进入黑夜。`);
       this.kill(id, 'explode');
+      await this.cue('explode');
     }
-    await this.pace(explode ? 2 : 1);
+    await this.pace();
     return explode;
   }
 

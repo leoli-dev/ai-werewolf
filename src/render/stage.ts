@@ -6,6 +6,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Animals } from './animals';
 import { Atmosphere } from './atmosphere';
+import { Explosions } from './explosion';
 import { PERSONAS } from '../personas';
 import { characterCanvas, graveCanvas, pixelTexture, werewolfCanvas, type Look } from './pixel';
 import { EXIT_PATH, billboardSprite, buildTown, seatAngle, seatPosition, type HouseRefs, type TownRefs } from './town';
@@ -95,6 +96,8 @@ export interface StageSounds {
   flap(vol: number): void;
   caw(vol: number): void;
   thunder(distance: number): void;
+  /** `big`: the house going up; otherwise the smaller blast where the wolf stood. */
+  explosion(vol: number, big: boolean): void;
 }
 
 interface Tween {
@@ -131,6 +134,9 @@ export class Stage {
   private tiltV: ShaderPass;
   private grade: ShaderPass;
   private atmo: Atmosphere;
+  private fx: Explosions;
+  /** While a house blows up the camera pulls back to take in the whole cloud. */
+  private blastView: { target: THREE.Vector3; until: number } | null = null;
   private town: TownRefs;
   private animals: Animals;
   private actors: Actor[] = [];
@@ -171,6 +177,7 @@ export class Stage {
     host.appendChild(this.renderer.domElement);
 
     this.atmo = new Atmosphere(this.scene);
+    this.fx = new Explosions(this.scene);
     this.town = buildTown();
     this.scene.add(this.town.root);
     this.billboards.push(...this.town.billboards);
@@ -322,9 +329,13 @@ export class Stage {
    * dead, sealed dark houses for the exiled, everyone else indoors (night) or on
    * the plaza, and `wolves` (seen by wolf players) out in the den.
    */
-  restore(r: { dead: number[]; exiled: number[]; indoors: boolean; wolves: number[]; night: boolean }) {
+  restore(r: { dead: number[]; exiled: number[]; exploded: number[]; indoors: boolean; wolves: number[]; night: boolean }) {
     this.resetAll();
     for (const id of r.dead) this.killed(id, true);
+    for (const id of r.exploded) {
+      this.killed(id, true);
+      this.fx.ruin(this.town.houses[id], id);
+    }
     for (const id of r.exiled) {
       const a = this.actors[id];
       a.status = 'exiled';
@@ -363,6 +374,33 @@ export class Stage {
     if (!silent) this.sounds?.doorBreak(this.falloff(h.doorstep));
   }
 
+  /**
+   * A wolf self-destructs: a blast where they stood, then their house goes up in a
+   * mushroom cloud and is left a burning ruin. Resolves once the cloud has risen.
+   */
+  async exploded(id: number): Promise<void> {
+    const a = this.actors[id];
+    if (a.status !== 'alive') return;
+    const at = (this.anchor(a) ?? a.base).clone();
+    const house = this.town.houses[id];
+    a.status = 'dead';
+    const gen = ++a.gen;
+    a.sprite.visible = false;
+    a.wolf.visible = false;
+    a.grave.visible = true;
+    this.fx.pop(at);
+    this.sounds?.explosion(this.falloff(at), false);
+    // face the house from the plaza and back off so the whole cloud fits
+    this.yawGoal = Math.atan2(-house.group.position.x, -house.group.position.z);
+    this.resetView(false);
+    this.pitchGoal = 0.3;
+    this.blastView = { target: house.group.position.clone().multiplyScalar(0.7).setY(6), until: this.time + 8 };
+    await this.wait(0.35);
+    if (a.gen !== gen) return; // a new game started meanwhile
+    this.sounds?.explosion(1, true);
+    await this.fx.blast(house, id);
+  }
+
   /** Exiled by vote: they walk out of town along the path; their house goes dark and is sealed. No grave. */
   exiled(id: number) {
     const a = this.actors[id];
@@ -396,7 +434,10 @@ export class Stage {
       a.wolf.visible = false;
       a.grave.visible = false;
     }
+    this.fx.reset();
+    this.blastView = null;
     for (const h of this.town.houses) {
+      h.group.visible = true;
       h.lit = true;
       h.state = 'normal';
       h.seal.visible = false;
@@ -608,6 +649,7 @@ export class Stage {
     const pr = this.renderer.getPixelRatio();
     (this.tiltH.uniforms.texel.value as THREE.Vector2).set(1 / (w * pr), 0);
     (this.tiltV.uniforms.texel.value as THREE.Vector2).set(0, 1 / (h * pr));
+    this.fx.setViewport(h * pr, this.camera.fov);
   }
 
   private frame() {
@@ -620,6 +662,7 @@ export class Stage {
     this.atmo.mix += (this.nightTarget - this.atmo.mix) * Math.min(1, dt * 0.8);
     const n = this.atmo.mix;
     this.atmo.update(dt, t);
+    this.fx.update(dt, t);
     this.stepTweens(dt);
     for (const w of this.town.windows) w.emissiveIntensity = THREE.MathUtils.lerp(0.15, 2.2, n);
     for (const h of this.town.houses) {
@@ -650,9 +693,12 @@ export class Stage {
     const focusedActor = this.focusId !== null ? this.actors[this.focusId] : null;
     const focusPos = focusedActor ? this.anchor(focusedActor) : null;
     const focused = focusPos ? { base: focusPos.clone().setY(0) } : null;
-    const tgt = (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
+    if (this.blastView && t > this.blastView.until) this.blastView = null;
+    const tgt = this.blastView
+      ? this.blastView.target.clone().add(this.pan)
+      : (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
-    const dist = (focused ? 34 : 40) * this.userZoom; // stay wide enough to keep most of the ring (and their bubbles) in view
+    const dist = (this.blastView ? 50 : focused ? 34 : 40) * this.userZoom; // stay wide enough to keep most of the ring (and their bubbles) in view
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
     const sway = Math.sin(t * 0.05) * 0.12;
     {
@@ -677,6 +723,11 @@ export class Stage {
       this.camTarget.z + Math.cos(this.yaw) * Math.cos(cp) * this.camDist,
     );
     this.camera.lookAt(this.camTarget);
+    if (this.fx.shake > 0.01) {
+      const s = this.fx.shake;
+      this.camera.position.add(new THREE.Vector3((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s));
+      this.camera.rotateZ((Math.random() - 0.5) * s * 0.03);
+    }
     this.camera.updateMatrixWorld();
 
     // focus ring/spot
@@ -707,12 +758,13 @@ export class Stage {
     const focusY = THREE.MathUtils.clamp((ft.y + 1) / 2, 0.2, 0.8);
     for (const p of [this.tiltH, this.tiltV]) {
       p.uniforms.focus.value += (focusY - p.uniforms.focus.value) * Math.min(1, dt * 3);
-      p.uniforms.band.value = focused ? 0.1 : 0.16;
+      // keep the towering cloud sharp instead of lost in the tilt-shift blur
+      p.uniforms.band.value = this.blastView ? 0.5 : focused ? 0.1 : 0.16;
     }
-    this.bloom.strength = THREE.MathUtils.lerp(0.35, 0.9, n) + this.atmo.lightning * 0.4;
+    this.bloom.strength = THREE.MathUtils.lerp(0.35, 0.9, n) + this.atmo.lightning * 0.4 + this.fx.flash * 0.4;
     this.grade.uniforms.time.value = t;
     this.grade.uniforms.night.value = n;
-    this.grade.uniforms.flash.value = this.atmo.lightning * n;
+    this.grade.uniforms.flash.value = this.atmo.lightning * n + this.fx.flash * 0.8;
     this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.05, 1.25, n);
 
     this.composer.render(dt);

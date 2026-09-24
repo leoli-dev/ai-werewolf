@@ -344,6 +344,7 @@ export class GameUI {
       const id = e.data!.id as number;
       // exiles walk home after their last words; everyone else leaves a grave now
       if (e.data!.cause === 'vote') this.pendingExile.add(id);
+      else if (e.data!.cause === 'explode') this.blast = this.stage.exploded(id);
       else this.stage.killed(id);
     }
     if (e.type === 'gm' && e.text.startsWith('天亮了')) {
@@ -376,18 +377,20 @@ export class GameUI {
     const night = s.phase === 'night';
     const dead: number[] = [];
     const exiled: number[] = [];
+    const exploded: number[] = [];
     for (const e of this.game.events) {
       if (e.type !== 'death') continue;
       const id = e.data!.id as number;
       // today's exile still stands on the plaza for the vote result / last words
-      if (e.data!.cause !== 'vote') dead.push(id);
+      if (e.data!.cause === 'explode') exploded.push(id);
+      else if (e.data!.cause !== 'vote') dead.push(id);
       else if (e.day === s.day && (s.phase === 'vote' || s.phase === 'lastWords')) this.pendingExile.add(id);
       else exiled.push(id);
     }
     const iSeeWolves = this.game.players[this.me].role === 'werewolf' || this.godView;
     this.wolvesShown = night && s.nightStep === 'wolves' && iSeeWolves ? this.game.wolves().filter((w) => w.alive).map((w) => w.id) : [];
     this.lastHowlStep = `${s.day}:${s.nightStep}`;
-    this.stage.restore({ dead, exiled, indoors: night, wolves: this.wolvesShown, night });
+    this.stage.restore({ dead, exiled, exploded, indoors: night, wolves: this.wolvesShown, night });
     this.onState(s);
     this.renderTabs();
   }
@@ -471,6 +474,8 @@ export class GameUI {
   // ───────────────────────── scene choreography ─────────────────────────
 
   private pendingExile = new Set<number>();
+  /** A wolf's house going up; the GM waits for it before nightfall. */
+  private blast: Promise<void> | null = null;
   private bubbleScope = '';
   private wolvesShown: number[] = [];
   private lastHowlStep: string | null = null;
@@ -519,6 +524,10 @@ export class GameUI {
           this.wolvesShown = this.game.wolves().filter((w) => w.alive).map((w) => w.id);
           job = this.stage.wolvesOut(this.wolvesShown);
         }
+        break;
+      case 'explode':
+        job = this.blast ?? job;
+        this.blast = null;
         break;
       case 'wolvesIn':
         if (this.wolvesShown.length) {

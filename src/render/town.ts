@@ -65,7 +65,9 @@ export interface HouseRefs {
   inside: THREE.Vector3;
   seal: THREE.Group;
   debris: THREE.Group;
-  state: 'normal' | 'broken' | 'sealed';
+  state: 'normal' | 'broken' | 'sealed' | 'ruined';
+  /** Footprint and wall height, for the ruin left by a wolf's self-destruct. */
+  size: { w: number; d: number; h: number };
 }
 
 export interface TownRefs {
@@ -340,6 +342,7 @@ function house(i: number, rng: Rng, refs: TownRefs): THREE.Group {
     seal,
     debris,
     state: 'normal',
+    size: { w, d, h },
   });
   return g;
 }
