@@ -520,8 +520,8 @@ export class Game {
   private async wolfTurn(): Promise<number | null> {
     const wolves = this.wolves().filter((w) => w.alive);
     if (!wolves.length) return null;
-    const ids = wolves.map((w) => w.id);
-    const channel: Visibility = { kind: 'private', to: ids };
+    // dead wolves (e.g. a voted-out human) keep watching their pack's channel
+    const channel: Visibility = { kind: 'private', to: this.wolves().map((w) => w.id) };
     this.announceStep('wolves', '狼人请睁眼，请商量今晚的目标。');
     await this.cue('wolvesOut');
     const day = this.state.day;

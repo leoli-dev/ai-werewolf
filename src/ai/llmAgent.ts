@@ -107,15 +107,29 @@ export class LLMAgent implements Agent {
   async choose(req: TargetRequest, view: PlayerView): Promise<number | null> {
     while (true) {
       let raw = '';
+      let parsed: ReturnType<typeof parseTarget>;
       try {
-        raw = await this.call(req.action, this.messages(view, targetTask(req, view)), 1000, this.provider.config.decisionReasoning);
+        const msgs = this.messages(view, targetTask(req, view));
+        raw = await this.call(req.action, msgs, 1000, this.provider.config.decisionReasoning);
+        parsed = parseTarget(raw, req);
+        if (parsed.target === undefined) {
+          // usually a seat outside the candidates (e.g. poisoning someone already dying
+          // tonight): show the model its answer and the valid list once before giving up
+          const cands = req.candidates.map((c) => c + 1).join('、');
+          msgs.push(
+            { role: 'assistant', content: raw },
+            { role: 'user', content: `这个选择无效：只能从以下号码中选择：${cands}${req.allowSkip ? '；不选择请填 0' : ''}。请重新只输出一行 JSON：{"target": 号码, "reason": "20字以内的理由"}` },
+          );
+          raw = await this.call(req.action, msgs, 1000, this.provider.config.decisionReasoning);
+          parsed = parseTarget(raw, req);
+        }
       } catch (e) {
         if (await this.shouldRetry(req.action, (e as Error).message)) continue;
         return this.fallback.choose(req, view);
       }
-      const { target, reason } = parseTarget(raw, req);
+      const { target, reason } = parsed;
       if (target === undefined) {
-        if (await this.shouldRetry(req.action, `无法从模型输出中解析目标：${raw.slice(0, 80)}`)) continue;
+        if (await this.shouldRetry(req.action, `模型给出的目标不在可选号码内或无法解析：${raw.slice(0, 80)}`)) continue;
         return this.fallback.choose(req, view);
       }
       const tag = { vote: '投票', revote: '再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', witchSave: '救', witchPoison: '毒' }[req.action];
