@@ -6,7 +6,7 @@ OpenAI-compatible endpoint. Usage: python3 mtplx_round_bench.py [n_rounds]"""
 import json, time, sys, urllib.request
 
 BASE = "http://127.0.0.1:8001/v1/chat/completions"
-MODEL = "mtplx-flash-next-optimized-speed"
+MODEL = "mtplx-qwen38-27b-optimized-speed"
 
 ROLES = ["预言家", "女巫", "猎人", "守卫", "狼人", "狼人", "狼人", "狼人",
          "村民", "村民", "村民", "村民"]

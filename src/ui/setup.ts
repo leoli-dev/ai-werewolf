@@ -13,6 +13,7 @@ export interface Settings {
 }
 
 const KEY = 'ai-werewolf:settings:v1';
+const RETIRED_DEFAULT_MODELS = ['mtplx-flash-next-optimized-speed'];
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: DEFAULT_PROVIDER,
@@ -29,7 +30,10 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      return { ...DEFAULT_SETTINGS, ...s, provider: { ...DEFAULT_PROVIDER, ...s.provider } };
+      const provider = { ...DEFAULT_PROVIDER, ...s.provider };
+      // models we used to ship as default: move saved settings onto the current default
+      if (RETIRED_DEFAULT_MODELS.includes(provider.model)) provider.model = DEFAULT_PROVIDER.model;
+      return { ...DEFAULT_SETTINGS, ...s, provider };
     }
   } catch {
     /* ignore */
@@ -95,11 +99,15 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
       testBtn.disabled = true;
       result.className = 'test-result';
       result.textContent = '连接中…（本地推理首个请求可能较慢）';
-      const cfg = read().provider;
-      const r = await new OpenAICompatibleProvider(cfg).test();
-      if (r.models?.length) {
-        modelList.replaceChildren(...r.models.map((m) => h('option', { value: m })));
+      // if the server serves exactly one model and it isn't the one typed in, switch to it first
+      try {
+        const served = await new OpenAICompatibleProvider(read().provider).listModels();
+        if (served.length === 1 && !served.includes(model.value.trim())) model.value = served[0];
+      } catch {
+        /* test() below reports connection problems */
       }
+      const r = await new OpenAICompatibleProvider(read().provider).test();
+      if (r.models?.length) modelList.replaceChildren(...r.models.map((m) => h('option', { value: m })));
       result.className = `test-result ${r.ok ? 'ok' : 'err'}`;
       result.textContent = (r.ok ? '✓ ' : '✗ ') + r.message + (r.models?.length ? `（可用模型：${r.models.join('、')}）` : '');
       testBtn.disabled = false;

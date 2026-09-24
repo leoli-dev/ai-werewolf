@@ -17,7 +17,7 @@ npm run typecheck
 | 字段 | 默认 |
 |---|---|
 | Base URL | `http://127.0.0.1:8001/v1`（本地 MTPLX） |
-| 模型 | `mtplx-flash-next-optimized-speed` |
+| 模型 | `mtplx-qwen38-27b-optimized-speed` |
 | 推理强度 | `medium`（作为 `reasoning_effort` 传递） |
 | 跨域代理 | 开：浏览器请求 `/__llm/*`，由 Vite 开发服务器转发到 Base URL（MTPLX 拒绝浏览器跨域） |
 
