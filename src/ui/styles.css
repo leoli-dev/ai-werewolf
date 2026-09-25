@@ -320,7 +320,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
     display: none; left: calc(var(--safe-l) + 6px); right: calc(var(--safe-r) + 6px); top: auto; width: auto;
     bottom: calc(var(--dock-h) + var(--kb, 0px) + var(--action-h, 0px) + 6px);
     max-height: calc(100dvh - var(--top-h) - var(--dock-h) - var(--kb, 0px) - var(--action-h, 0px) - 12px);
-    animation: sheet 0.2s ease-out;
+    animation: sheet 0.2s ease-out; z-index: 5; /* above the night-turn announcement */
   }
   #app[data-sheet="players"] #hud { display: flex; }
   #app[data-sheet="chat"] #chat { display: flex; height: 62dvh; }
