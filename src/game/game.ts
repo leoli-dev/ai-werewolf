@@ -50,7 +50,7 @@ export interface GameState {
   witch: { hasAntidote: boolean; hasPoison: boolean };
   hunterShot: boolean;
   lastGuarded: number | null;
-  /** Seer knowledge: target -> exact role (only results that survived dawn). */
+  /** Seer knowledge: target -> exact role (told at once, during the seer's turn). */
   seerChecks: Record<number, Role>;
   /** Which night role is currently awake (public knowledge, drives scene/audio). */
   nightStep: NightStep | null;
@@ -58,8 +58,18 @@ export interface GameState {
 
 export type NightStep = 'seer' | 'guard' | 'wolves' | 'hunter' | 'witch';
 
+/**
+ * A night role's action (or the hunter's day shot), staged for whoever may see it:
+ * night ones only for the acting player (or god view), the day shot for everyone.
+ */
+export interface RoleCue {
+  kind: 'seer' | 'guard' | 'witchSave' | 'witchPoison' | 'nightShot' | 'dayShot';
+  actor: number;
+  target: number;
+}
+
 /** Moments where the GM waits for the scene to finish animating. */
-export type SceneCue = 'nightfall' | 'wolvesOut' | 'wolvesIn' | 'dawn' | 'explode';
+export type SceneCue = 'nightfall' | 'wolvesOut' | 'wolvesIn' | 'dawn' | 'explode' | RoleCue;
 
 export interface GameHooks {
   onEvent?(e: GameEvent): void;
@@ -435,7 +445,6 @@ export class Game {
 
     // 1. 预言家
     const seer = this.byRole('seer');
-    let seerResult: { target: number; role: Role } | null = null;
     // every turn is announced every night, even if that role is gone (no information leak)
     this.announceStep('seer', '预言家请睁眼，请选择要查验的玩家。');
     if (!seer?.alive) await this.idleTurn();
@@ -443,8 +452,12 @@ export class Game {
       const cands = alive.filter((i) => i !== seer.id && !(i in this.state.seerChecks));
       const target = await this.askTarget(seer.id, 'seer', cands.length ? cands : alive.filter((i) => i !== seer.id), false, '选择今晚要查验的玩家。', '预言家查验中');
       if (target !== null) {
-        seerResult = { target, role: this.players[target].role };
-        this.gm(`你查验了 ${seat(target)}，结果将在天亮时揭晓（若你活到天亮）。`, [seer.id]);
+        // the GM tells the seer at once
+        const role = this.players[target].role;
+        this.state.seerChecks[target] = role;
+        this.emit('private', `查验结果：${seat(target)} 的身份是【${ROLE_NAME[role]}】。`, { kind: 'private', to: [seer.id] }, { data: { check: target, role } });
+        this.publish();
+        await this.cue({ kind: 'seer', actor: seer.id, target });
       }
       await this.pace();
     }
@@ -457,7 +470,11 @@ export class Game {
     else {
       const cands = alive.filter((i) => i !== guardP.id && i !== this.state.lastGuarded);
       guarded = await this.askTarget(guardP.id, 'guard', cands, true, `不能守护自己，不能连续守护同一人（上一晚守护：${this.state.lastGuarded === null ? '无' : seat(this.state.lastGuarded)}）。可以空守。`, '守卫守护中');
-      this.gm(guarded === null ? '你今晚选择空守。' : `你今晚守护了 ${seat(guarded)}。`, [guardP.id]);
+      if (guarded === null) this.gm('你今晚选择空守。', [guardP.id]);
+      else {
+        this.emit('private', `你今晚守护了 ${seat(guarded)}。`, { kind: 'private', to: [guardP.id] }, { data: { guard: guarded } });
+        await this.cue({ kind: 'guard', actor: guardP.id, target: guarded });
+      }
       await this.pace();
     }
     this.state.lastGuarded = guarded;
@@ -477,7 +494,8 @@ export class Game {
       if (shot !== null) {
         this.state.hunterShot = true;
         pending.set(shot, 'hunter');
-        this.gm(`你向 ${seat(shot)} 开了枪。`, [hunter.id]);
+        this.emit('private', `你向 ${seat(shot)} 开了枪。`, { kind: 'private', to: [hunter.id] }, { data: { shot } });
+        await this.cue({ kind: 'nightShot', actor: hunter.id, target: shot });
       }
       await this.pace();
     }
@@ -494,7 +512,8 @@ export class Game {
         if (save !== null) {
           w.hasAntidote = false;
           pending.delete(save);
-          this.gm(`你用金水救了 ${seat(save)}。`, [witch.id]);
+          this.emit('private', `你用金水救了 ${seat(save)}。`, { kind: 'private', to: [witch.id] }, { data: { saved: save } });
+          await this.cue({ kind: 'witchSave', actor: witch.id, target: save });
         }
       } else if (w.hasAntidote) {
         this.gm('今晚无人死亡。', [witch.id]);
@@ -505,7 +524,8 @@ export class Game {
         if (poison !== null) {
           w.hasPoison = false;
           pending.set(poison, 'poison');
-          this.gm(`你向 ${seat(poison)} 使用了银水。`, [witch.id]);
+          this.emit('private', `你向 ${seat(poison)} 使用了银水。`, { kind: 'private', to: [witch.id] }, { data: { poison } });
+          await this.cue({ kind: 'witchPoison', actor: witch.id, target: poison });
         }
       }
       await this.pace();
@@ -515,10 +535,6 @@ export class Game {
     this.setNightStep(null);
     this.setPhase('dawn');
     const deaths = [...pending.keys()].sort((a, b) => a - b);
-    if (seer && seerResult && !pending.has(seer.id) && seer.alive) {
-      this.state.seerChecks[seerResult.target] = seerResult.role;
-      this.emit('private', `查验结果：${seat(seerResult.target)} 的身份是【${ROLE_NAME[seerResult.role]}】。`, { kind: 'private', to: [seer.id] }, { data: { check: seerResult.target, role: seerResult.role } });
-    }
     this.gm(`天亮了。${deaths.length ? `昨晚死亡的玩家：${deaths.map((i) => `${seat(i)} ${this.players[i].name}`).join('、')}。` : '昨晚是平安夜。'}`);
     for (const id of deaths) this.kill(id, pending.get(id)!);
     await this.cue('dawn');
@@ -608,6 +624,7 @@ export class Game {
     this.state.hunterShot = true; // chance is consumed either way
     if (shot !== null) {
       this.gm(`${seat(hunter.id)} 是猎人，开枪带走了 ${seat(shot)} ${this.players[shot].name}。`);
+      await this.cue({ kind: 'dayShot', actor: hunter.id, target: shot });
       this.kill(shot, 'hunter');
       await this.pace(2);
       return this.endIfWon();

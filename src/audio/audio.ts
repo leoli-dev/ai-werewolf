@@ -604,6 +604,221 @@ export class AudioEngine {
     this.burst(this.sfx, t, 'highpass', 4000, 0.7, 0.2 * vol, 0.001, 0.08, 0.5);
   }
 
+  /** 守卫: a rising shimmer as the bell comes down (it rings on landing: `bell`). */
+  guardCast(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const s = this.noiseSrc();
+    const f = this.filter('bandpass', 1200, 6);
+    f.frequency.setValueAtTime(900, t);
+    f.frequency.exponentialRampToValueAtTime(5200, t + 1.2);
+    const g = this.env(t, 0.9, 0.22 * vol, 0.5);
+    s.connect(f).connect(g);
+    this.out(g, this.sfx, 0.7);
+    s.start(t);
+    s.stop(t + 1.5);
+    [69, 73, 76, 81].forEach((n, k) => this.tone(this.sfx, t + k * 0.22, midi(n), 'sine', 0.05 * vol, 0.01, 1.2, 0.8));
+  }
+
+  /** 查验: a run of glockenspiel twinkles. */
+  sparkle(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const notes = [88, 91, 95, 93, 96, 100, 98, 103];
+    notes.forEach((n, k) => {
+      const at = t + k * 0.13 + Math.random() * 0.04;
+      this.tone(this.sfx, at, midi(n), 'sine', 0.05 * vol, 0.003, 0.7, 0.8);
+      this.tone(this.sfx, at, midi(n) * 2.76, 'sine', 0.012 * vol, 0.003, 0.3, 0.8);
+    });
+    this.burst(this.sfx, t, 'highpass', 6000, 0.7, 0.05 * vol, 0.6, 1.2, 0.6);
+  }
+
+  /** The verdict: a bright open chord (good), or a low dissonant sting (wolf). */
+  reveal(wolf: boolean, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const chord = wolf ? [36, 42, 43, 48] : [60, 67, 72, 76, 79];
+    for (const n of chord) {
+      this.tone(this.sfx, t, midi(n), wolf ? 'sawtooth' : 'triangle', wolf ? 0.05 : 0.06, 0.02, wolf ? 2.4 : 2.8, 0.8);
+    }
+    if (wolf) this.burst(this.sfx, t, 'lowpass', 300, 1, 0.5, 0.01, 1.2, 0.4);
+    else this.tone(this.sfx, t, midi(96), 'sine', 0.04, 0.005, 1.6, 0.9);
+  }
+
+  /** 银水: a glass vial smashes, then the poison hisses and bubbles. */
+  poison(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    for (let k = 0; k < 8; k++) {
+      const at = t + Math.random() * 0.12;
+      this.tone(this.sfx, at, 2500 + Math.random() * 3500, 'sine', 0.05 * vol, 0.001, 0.12 + Math.random() * 0.2, 0.4);
+    }
+    this.burst(this.sfx, t, 'highpass', 3500, 0.8, 0.3 * vol, 0.002, 0.15);
+    // hiss (longer than the noise buffer: loop it)
+    const hiss = this.noiseSrc(true);
+    const hg = this.env(t + 0.2, 0.4, 0.14 * vol, 3.2);
+    hiss.connect(this.filter('highpass', 2800, 0.6)).connect(hg);
+    this.out(hg, this.sfx, 0.3);
+    hiss.start(t + 0.2);
+    hiss.stop(t + 3.9);
+    // bubbles: little upward blips
+    for (let k = 0; k < 26; k++) {
+      const at = t + 0.3 + Math.random() * 3.5;
+      const o = this.ctx!.createOscillator();
+      const f0 = 250 + Math.random() * 500;
+      o.frequency.setValueAtTime(f0, at);
+      o.frequency.exponentialRampToValueAtTime(f0 * 2.4, at + 0.06);
+      const g = this.env(at, 0.004, (0.06 + Math.random() * 0.06) * vol, 0.07);
+      o.connect(g);
+      this.out(g, this.sfx, 0.2);
+      o.start(at);
+      o.stop(at + 0.12);
+    }
+  }
+
+  /** The poisoned victim moans (two long "ohh…"s and a choking cough). */
+  groan(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const ctx = this.ctx!;
+    const moan = (at: number, f0: number, dur: number) => {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f0, at);
+      o.frequency.linearRampToValueAtTime(f0 * 1.12, at + dur * 0.25);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.7, at + dur);
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 5;
+      const la = ctx.createGain();
+      la.gain.value = f0 * 0.03;
+      lfo.connect(la).connect(o.frequency);
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0.0001, at);
+      env.gain.linearRampToValueAtTime(0.35 * vol, at + 0.25);
+      env.gain.setValueAtTime(0.3 * vol, at + dur * 0.7);
+      env.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+      // "oh" formants, muffled by the walls
+      const mix = ctx.createGain();
+      o.connect(this.filter('bandpass', 480, 5)).connect(mix);
+      o.connect(this.filter('bandpass', 850, 6)).connect(mix);
+      const muffle = this.filter('lowpass', 1400, 0.7);
+      mix.connect(muffle).connect(env);
+      this.out(env, this.sfx, 0.5);
+      o.start(at);
+      lfo.start(at);
+      o.stop(at + dur + 0.05);
+      lfo.stop(at + dur + 0.05);
+    };
+    moan(t, 150, 1.5);
+    moan(t + 1.8, 130, 2);
+    for (let k = 0; k < 3; k++) this.burst(this.sfx, t + 4 + k * 0.28, 'bandpass', 700, 1.5, 0.3 * vol, 0.01, 0.16, 0.3);
+  }
+
+  /** 金水: a choir sings a short hymn (I – IV – V – I), with a bell over the last chord. */
+  hymn(delay = 0) {
+    const t0 = this.now(delay);
+    if (t0 < 0) return;
+    const ctx = this.ctx!;
+    const chords = [
+      [48, 55, 64, 67],
+      [53, 57, 65, 69],
+      [55, 59, 62, 67],
+      [48, 55, 64, 72],
+    ];
+    const len = 1.5;
+    const voice = (at: number, n: number, dur: number) => {
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0.0001, at);
+      env.gain.linearRampToValueAtTime(0.07, at + 0.35);
+      env.gain.setValueAtTime(0.07, at + dur - 0.2);
+      env.gain.exponentialRampToValueAtTime(0.0001, at + dur + 0.4);
+      const mix = ctx.createGain();
+      // "aah" formants
+      mix.connect(this.filter('bandpass', 800, 4)).connect(env);
+      mix.connect(this.filter('bandpass', 1150, 5)).connect(env);
+      mix.connect(this.filter('bandpass', 2900, 8)).connect(env);
+      for (const det of [-9, 0, 8]) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = midi(n);
+        o.detune.value = det;
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 5 + Math.random();
+        const la = ctx.createGain();
+        la.gain.value = 5;
+        lfo.connect(la).connect(o.detune);
+        o.connect(mix);
+        o.start(at);
+        lfo.start(at);
+        o.stop(at + dur + 0.5);
+        lfo.stop(at + dur + 0.5);
+      }
+      this.out(env, this.sfx, 1);
+    };
+    chords.forEach((c, k) => {
+      const dur = k === chords.length - 1 ? len * 1.8 : len;
+      for (const n of c) voice(t0 + k * len, n, dur);
+    });
+    const end = t0 + (chords.length - 1) * len;
+    for (const [ratio, amp] of [[1, 0.08], [2.76, 0.03], [5.4, 0.015]] as const) this.tone(this.sfx, end, midi(84) * ratio, 'sine', amp, 0.005, 3, 0.9);
+  }
+
+  /** The crosshair locks on: two quick electronic ticks. */
+  lock() {
+    const t = this.now();
+    if (t < 0) return;
+    this.tone(this.sfx, t, 1760, 'square', 0.04, 0.002, 0.05, 0);
+    this.tone(this.sfx, t + 0.08, 2350, 'square', 0.04, 0.002, 0.08, 0);
+  }
+
+  /** A shotgun blast echoing round the town. */
+  gunshot(delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    this.burst(this.sfx, t, 'lowpass', 4000, 0.5, 1.2, 0.001, 0.25, 0.8);
+    this.burst(this.sfx, t, 'highpass', 2000, 0.7, 0.5, 0.001, 0.06);
+    const o = this.ctx!.createOscillator();
+    o.frequency.setValueAtTime(150, t);
+    o.frequency.exponentialRampToValueAtTime(40, t + 0.3);
+    const g = this.env(t, 0.002, 1, 0.4);
+    o.connect(g);
+    this.out(g, this.sfx, 0.6);
+    o.start(t);
+    o.stop(t + 0.5);
+    // echoes off the houses
+    for (const [d, v] of [[0.28, 0.25], [0.55, 0.12], [0.9, 0.06]] as const) this.burst(this.sfx, t + d, 'lowpass', 1200, 0.6, v, 0.005, 0.3, 0.5);
+  }
+
+  /** Someone takes the shot: a short cry and a body hitting the floor. */
+  hit(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(260, t);
+    o.frequency.linearRampToValueAtTime(330, t + 0.06);
+    o.frequency.exponentialRampToValueAtTime(140, t + 0.4);
+    const env = this.env(t, 0.01, 0.35 * vol, 0.4);
+    const mix = ctx.createGain();
+    o.connect(this.filter('bandpass', 700, 4)).connect(mix);
+    o.connect(this.filter('bandpass', 1200, 5)).connect(mix);
+    mix.connect(env);
+    this.out(env, this.sfx, 0.5);
+    o.start(t);
+    o.stop(t + 0.5);
+    const b = t + 0.45;
+    const th = ctx.createOscillator();
+    th.frequency.setValueAtTime(90, b);
+    th.frequency.exponentialRampToValueAtTime(40, b + 0.2);
+    const g = this.env(b, 0.004, 0.7 * vol, 0.3);
+    th.connect(g);
+    this.out(g, this.sfx, 0.3);
+    th.start(b);
+    th.stop(b + 0.4);
+    this.burst(this.sfx, b, 'lowpass', 600, 0.8, 0.4 * vol, 0.003, 0.2);
+  }
+
   seal(vol = 1, delay = 0) {
     const t = this.now(delay);
     if (t < 0) return;

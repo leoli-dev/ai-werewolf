@@ -4,6 +4,8 @@ import type { HouseRefs } from './town';
 /**
  * 金钟罩: when the wolves attack a house the guard protects, a golden bell of
  * light flares over it with every blow, rippling out from where it was struck.
+ * Seen by the guard, the bell comes down over the house they chose and stays
+ * lit, softly, until dawn.
  */
 
 // bell profile (radius, height), bottom rim to crown, as fractions of R / H
@@ -65,6 +67,12 @@ export class Shield {
   private mat: THREE.ShaderMaterial;
   private power = 0;
   private hitAge = 10;
+  /** Steady glow while the guard's bell stands over a house (0 = only flares on a hit). */
+  private hold = 0;
+  private holdGoal = 0;
+  private house: HouseRefs | null = null;
+  /** Descent of the bell when it is cast: 0 (high above) .. 1 (settled). */
+  private drop = 1;
 
   constructor(scene: THREE.Scene) {
     const g = new THREE.LatheGeometry(PROFILE.map(([r, y]) => new THREE.Vector2(r, y)), 48, 0, Math.PI * 2);
@@ -91,13 +99,7 @@ export class Shield {
 
   /** Flare the bell over `house`, struck at world point `at`; `power` > 1 for the final repulse. */
   strike(house: HouseRefs, at: THREE.Vector3, power = 1) {
-    const { w, d, h } = house.size;
-    const R = Math.hypot(w, d) / 2 + 0.7;
-    const H = h + 3.2;
-    this.mesh.position.copy(house.group.position);
-    this.mesh.rotation.copy(house.group.rotation);
-    this.mesh.scale.set(R, H, R);
-    this.mesh.updateMatrixWorld(true);
+    this.place(house);
     // the ripple is measured in the mesh's own (unit-bell) space
     const local = this.mesh.worldToLocal(at.clone());
     (this.mat.uniforms.hit.value as THREE.Vector3).copy(local);
@@ -107,8 +109,41 @@ export class Shield {
     this.mesh.visible = true;
   }
 
+  private place(house: HouseRefs) {
+    const { w, d, h } = house.size;
+    const R = Math.hypot(w, d) / 2 + 0.7;
+    const H = h + 3.2;
+    this.house = house;
+    this.mesh.position.copy(house.group.position);
+    this.mesh.position.y = (1 - this.drop) * (1 - this.drop) * 9;
+    this.mesh.rotation.copy(house.group.rotation);
+    this.mesh.scale.set(R, H, R);
+    this.mesh.updateMatrixWorld(true);
+  }
+
+  /** The guard's bell drops over `house` (or is simply there: `instant`) and stays lit until `uncover`. */
+  cover(house: HouseRefs, instant = false) {
+    this.drop = instant ? 1 : 0;
+    this.holdGoal = 0.45;
+    this.hold = instant ? this.holdGoal : 0;
+    this.power = 0;
+    this.place(house);
+    this.mesh.visible = true;
+  }
+
+  get covering() {
+    return this.holdGoal > 0 ? this.house : null;
+  }
+
+  /** Dawn: the bell fades away. */
+  uncover() {
+    this.holdGoal = 0;
+  }
+
   hide() {
     this.power = 0;
+    this.hold = this.holdGoal = 0;
+    this.drop = 1;
     this.mesh.visible = false;
   }
 
@@ -116,9 +151,21 @@ export class Shield {
     if (!this.mesh.visible) return;
     this.hitAge += dt;
     this.power *= Math.exp(-dt * 1.4);
-    this.mat.uniforms.power.value = this.power;
+    if (this.drop < 1 && this.house) {
+      // comes down in ~1.2 s and rings as it lands
+      this.drop = Math.min(1, this.drop + dt / 1.2);
+      this.place(this.house);
+      if (this.drop === 1) {
+        this.hitAge = 0;
+        (this.mat.uniforms.hit.value as THREE.Vector3).set(0, 0, 0);
+        this.power = Math.max(this.power, 1.3);
+      }
+    }
+    this.hold += (this.holdGoal - this.hold) * Math.min(1, dt * (this.holdGoal > this.hold ? 1.5 : 0.8));
+    const breathe = 1 + Math.sin(t * 1.7) * 0.15;
+    this.mat.uniforms.power.value = Math.max(this.power, this.hold * breathe);
     this.mat.uniforms.time.value = t;
     this.mat.uniforms.hitAge.value = this.hitAge;
-    if (this.power < 0.01 && this.hitAge > 2) this.mesh.visible = false;
+    if (this.power < 0.01 && this.hitAge > 2 && this.hold < 0.01 && this.holdGoal === 0) this.mesh.visible = false;
   }
 }

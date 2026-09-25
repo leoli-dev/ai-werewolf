@@ -8,8 +8,9 @@ import { Animals } from './animals';
 import { Atmosphere } from './atmosphere';
 import { Explosions } from './explosion';
 import { Shield } from './shield';
+import { HouseSkin, Magic, Reticle } from './magic';
 import { PERSONAS } from '../personas';
-import { characterCanvas, graveCanvas, pixelTexture, werewolfCanvas, type Look } from './pixel';
+import { characterSheet, graveCanvas, pixelTexture, setFrame, sheetTexture, werewolfSheet, type Look } from './pixel';
 import { EXIT_PATH, billboardSprite, buildTown, seatAngle, seatPosition, type HouseRefs, type TownRefs } from './town';
 
 /** Separable tilt-shift blur: sharp band around `focus` (0..1 screen y), blur grows away from it. */
@@ -103,6 +104,20 @@ export interface StageSounds {
   growl(vol: number): void;
   scream(vol: number): void;
   bell(vol: number): void;
+  /** 守卫 casts the bell over a house. */
+  guardCast(vol: number): void;
+  /** 查验: twinkling chimes, then the verdict (a bright chord, or a low sting for a wolf). */
+  sparkle(vol: number): void;
+  reveal(wolf: boolean): void;
+  /** 银水: the bottle breaks and the poison hisses and bubbles; then the victim moans. */
+  poison(vol: number): void;
+  groan(vol: number): void;
+  /** 金水: a choir sings a hymn. */
+  hymn(): void;
+  /** 猎人: the crosshair locks, the gun goes off, someone is hit. */
+  lock(): void;
+  gunshot(): void;
+  hit(vol: number): void;
 }
 
 interface Tween {
@@ -146,6 +161,14 @@ export class Stage {
    */
   private shot: { target: THREE.Vector3; until: number; dist: number; band: number } | null = null;
   private shield: Shield;
+  private magic: Magic;
+  private reticle: Reticle;
+  /** Where the crosshair is aimed (world space), while it is up. */
+  private aimAt: THREE.Vector3 | null = null;
+  /** Houses whose look is changed for a set piece, restored when it ends (or on reset). */
+  private skins = new Map<number, HouseSkin>();
+  /** Bumped by `resetAll`: set pieces of an old game stop where they are. */
+  private epoch = 0;
   private town: TownRefs;
   private animals: Animals;
   private actors: Actor[] = [];
@@ -188,6 +211,9 @@ export class Stage {
     this.atmo = new Atmosphere(this.scene);
     this.fx = new Explosions(this.scene);
     this.shield = new Shield(this.scene);
+    this.magic = new Magic(this.scene);
+    this.billboards.push(...this.magic.billboards);
+    this.reticle = new Reticle(host);
     this.town = buildTown();
     this.scene.add(this.town.root);
     this.billboards.push(...this.town.billboards);
@@ -197,11 +223,11 @@ export class Stage {
     this.billboards.push(...this.animals.billboards);
 
     for (let i = 0; i < 12; i++) {
-      const tex = pixelTexture(characterCanvas(PERSONAS[i].look));
+      const tex = sheetTexture(characterSheet(PERSONAS[i].look));
       const sprite = this.selfLit(billboardSprite(tex, 1.25, 1.875), tex);
       const base = seatPosition(i);
       sprite.position.copy(base);
-      const wtex = pixelTexture(werewolfCanvas(i));
+      const wtex = sheetTexture(werewolfSheet(i));
       const wolf = this.selfLit(billboardSprite(wtex, 1.9, 2.375), wtex);
       wolf.visible = false;
       const grave = billboardSprite(pixelTexture(graveCanvas('cross', i)), 0.8, 1.05);
@@ -301,6 +327,7 @@ export class Stage {
 
   /** Dawn: survivors open their doors and walk back to the plaza. */
   dayBreak(): Promise<void> {
+    this.shield.uncover(); // the guard's bell stands until morning
     const jobs: Promise<void>[] = [];
     for (const a of this.actors) {
       if (a.status !== 'alive') continue;
@@ -348,8 +375,21 @@ export class Stage {
    * dead, sealed dark houses for the exiled, everyone else indoors (night) or on
    * the plaza, and `wolves` (seen by wolf players) out in the den.
    */
-  restore(r: { dead: number[]; exiled: number[]; exploded: number[]; indoors: boolean; wolves: number[]; night: boolean }) {
+  restore(r: {
+    dead: number[];
+    exiled: number[];
+    exploded: number[];
+    indoors: boolean;
+    wolves: number[];
+    night: boolean;
+    /** Tonight's guarded house (seen by the guard): its bell is up. */
+    guarded?: number | null;
+    /** Houses whose light went out tonight (poisoned / shot, seen by the one who did it). */
+    darkened?: number[];
+  }) {
     this.resetAll();
+    if (r.guarded != null) this.shield.cover(this.town.houses[r.guarded], true);
+    for (const id of r.darkened ?? []) this.town.houses[id].lit = false;
     for (const id of r.dead) this.killed(id, true);
     for (const id of r.exploded) {
       this.killed(id, true);
@@ -423,10 +463,7 @@ export class Stage {
     const door = g.localToWorld(new THREE.Vector3(0, 1.1, d / 2 + 0.1));
     const outward = g.localToWorld(new THREE.Vector3(0, 0, 1)).sub(g.position).setY(0).normalize();
 
-    this.shot = { target: g.position.clone().multiplyScalar(0.85).setY(1.4), until: this.time + 60, dist: 24, band: 0.3 };
-    this.yawGoal = Math.atan2(-g.position.x, -g.position.z) + 0.35; // from the plaza side, a little off-axis
-    this.resetView(false);
-    this.pitchGoal = 0.42;
+    this.frameHouse(target, { dist: 24, pitch: 0.42, yaw: 0.35 }); // from the plaza side, a little off-axis
 
     // charge
     await Promise.all(pack.map((a, k) => this.wait(k * 0.15).then(() => this.walk(a.wolf, spots[k], live(a), 6))));
@@ -493,17 +530,246 @@ export class Stage {
     this.shot = null;
   }
 
+  // ── night roles' set pieces (seen by the player who acts, or god view) ──
+
+  /**
+   * Point the camera at house `id` from the plaza side. `lift` raises the aim (e.g.
+   * to take in the angel over the roof); the shot holds for `secs`.
+   */
+  private frameHouse(id: number, o: { dist: number; pitch: number; yaw?: number; lift?: number; secs?: number; inset?: number }) {
+    const g = this.town.houses[id].group;
+    this.shot = { target: g.position.clone().multiplyScalar(o.inset ?? 0.85).setY(o.lift ?? 1.4), until: this.time + (o.secs ?? 60), dist: o.dist, band: 0.3 };
+    this.yawGoal = Math.atan2(-g.position.x, -g.position.z) + (o.yaw ?? 0);
+    this.resetView(false);
+    this.pitchGoal = o.pitch;
+  }
+
+  /** Back to the player's own house for a moment, then the usual framing. */
+  private goHome(me: number) {
+    this.frameHouse(me, { dist: 30, pitch: 0.5, secs: 2.5 });
+    return this.wait(1);
+  }
+
+  private skin(id: number): HouseSkin {
+    let s = this.skins.get(id);
+    if (!s) this.skins.set(id, (s = new HouseSkin(this.town.houses[id])));
+    return s;
+  }
+
+  private unskin(id: number) {
+    this.skins.get(id)?.restore();
+    this.skins.delete(id);
+  }
+
+  /** The lights inside stutter and go out. */
+  private async lightsOut(h: HouseRefs) {
+    await this.tween(0.8, (k) => {
+      for (const w of h.windows) w.emissiveIntensity = Math.random() < 0.5 + k * 0.4 ? 0 : 2.4 * (1 - k);
+    });
+    h.lit = false;
+    for (const w of h.windows) w.emissiveIntensity = 0;
+  }
+
+  /** 守卫: a golden bell comes down over the house they chose; it stands until dawn. */
+  async guardCover(id: number, me: number): Promise<void> {
+    const epoch = this.epoch;
+    const h = this.town.houses[id];
+    this.frameHouse(id, { dist: 26, pitch: 0.45, yaw: 0.3, lift: 2 });
+    await this.wait(0.9);
+    if (epoch !== this.epoch) return;
+    this.shield.cover(h);
+    this.sounds?.guardCast(this.falloff(h.doorstep));
+    await this.wait(1.2);
+    if (epoch !== this.epoch) return;
+    this.sounds?.bell(0.8);
+    this.fx.shake = Math.max(this.fx.shake, 0.08);
+    await this.wait(1.8);
+    if (epoch !== this.epoch) return;
+    await this.goHome(me);
+  }
+
+  /**
+   * 查验: sparkles gather round the house, it turns see-through and shows who is
+   * inside — a werewolf if that is what they are — standing in a green (good) or
+   * red (wolf) ring, with their role over their name. Then the house closes up.
+   */
+  async seerReveal(id: number, wolf: boolean, me: number): Promise<void> {
+    const epoch = this.epoch;
+    const a = this.actors[id];
+    const h = this.town.houses[id];
+    const gen = ++a.gen;
+    const ok = () => epoch === this.epoch && a.gen === gen;
+    this.frameHouse(id, { dist: 19, pitch: 0.62, yaw: 0.25, inset: 0.95, lift: 1 });
+    await this.wait(1);
+    if (!ok()) return;
+    this.fx.sparkles(h, 4.5);
+    this.sounds?.sparkle(this.falloff(h.doorstep));
+    this.magic.shine(h.group.position.clone().setY(3.5), 0xb8d0ff, 40);
+    await this.wait(0.9);
+    if (!ok()) return;
+    const skin = this.skin(id);
+    const body = wolf ? a.wolf : a.sprite;
+    await this.tween(1.6, (k) => {
+      skin.opacity(1 - 0.88 * k * k);
+      if (k > 0.45 && !body.visible && ok()) {
+        body.position.copy(h.group.position).setY(0);
+        body.scale.x = 1;
+        body.visible = true;
+      }
+    });
+    if (!ok()) return;
+    this.magic.showVerdict(h.group.position, wolf);
+    this.sounds?.reveal(wolf);
+    if (wolf) this.sounds?.growl(this.falloff(h.doorstep) * 0.8);
+    await this.wait(3.4);
+    if (!ok()) return;
+    this.magic.hideVerdict();
+    this.magic.dark();
+    body.visible = false;
+    await this.tween(1.2, (k) => skin.opacity(0.12 + 0.88 * k));
+    if (!ok()) return;
+    this.unskin(id);
+    await this.goHome(me);
+  }
+
+  /**
+   * 银水: the house is eaten by poison (green fumes, dripping walls), someone moans
+   * inside, the lights go out.
+   */
+  async witchPoison(id: number, me: number): Promise<void> {
+    const epoch = this.epoch;
+    const h = this.town.houses[id];
+    const ok = () => epoch === this.epoch;
+    this.frameHouse(id, { dist: 22, pitch: 0.42, yaw: 0.3 });
+    await this.wait(1);
+    if (!ok()) return;
+    this.sounds?.poison(this.falloff(h.doorstep));
+    this.fx.toxic(h, 5.5);
+    this.magic.shine(h.group.position.clone().setY(2.5), 0x60ff50, 14);
+    const skin = this.skin(id);
+    let groaned = false;
+    await this.tween(3.4, (k) => {
+      if (!ok()) return;
+      skin.corrode(Math.min(1, k * 1.6), this.time);
+      if (k > 0.4 && !groaned) {
+        groaned = true;
+        this.sounds?.groan(this.falloff(h.doorstep));
+      }
+    });
+    if (!ok()) return;
+    await this.lightsOut(h);
+    await this.wait(1.4);
+    if (!ok()) return;
+    this.magic.dark();
+    await this.tween(1.6, (k) => ok() && skin.corrode(1 - k, this.time));
+    if (!ok()) return;
+    this.unskin(id);
+    await this.goHome(me);
+  }
+
+  /** 金水: an archangel comes down over the house, a ring of holy light rises round it, a choir sings. */
+  async witchSave(id: number, me: number): Promise<void> {
+    const epoch = this.epoch;
+    const h = this.town.houses[id];
+    const ok = () => epoch === this.epoch;
+    this.frameHouse(id, { dist: 32, pitch: 0.26, yaw: 0.25, lift: 3.6 });
+    await this.wait(1);
+    if (!ok()) return;
+    this.magic.bless(h);
+    this.sounds?.hymn();
+    const { w, d } = h.size;
+    this.fx.motes(h.group.position, Math.hypot(w, d) / 2 + 0.9, 6);
+    await this.wait(6.5);
+    if (!ok()) return;
+    this.magic.unbless();
+    await this.wait(1.5);
+    if (!ok()) return;
+    await this.goHome(me);
+  }
+
+  /** The crosshair sweeps in, locks on `at`, and the gun goes off. */
+  private async takeAim(at: THREE.Vector3, ok: () => boolean): Promise<boolean> {
+    this.aimAt = at;
+    this.reticle.start(this.host.clientWidth, this.host.clientHeight);
+    await this.wait(this.reticle.sweep);
+    if (!ok()) return false;
+    this.reticle.lock();
+    this.sounds?.lock();
+    await this.wait(0.6);
+    if (!ok()) return false;
+    this.reticle.fire();
+    this.sounds?.gunshot();
+    this.fx.flash = Math.max(this.fx.flash, 0.55);
+    this.fx.shake = Math.max(this.fx.shake, 0.3);
+    void this.wait(0.5).then(() => {
+      if (this.aimAt === at) this.aimAt = null;
+    });
+    return true;
+  }
+
+  /** 猎人夜里开枪: aim at the house, fire; a cry inside, the lights go out. */
+  async nightShot(id: number, me: number): Promise<void> {
+    const epoch = this.epoch;
+    const h = this.town.houses[id];
+    const ok = () => epoch === this.epoch;
+    this.frameHouse(id, { dist: 20, pitch: 0.34, yaw: 0.2 });
+    await this.wait(1.1);
+    if (!ok()) return;
+    const pane = h.group.localToWorld(new THREE.Vector3(0, h.size.h * 0.6, h.size.d / 2));
+    if (!(await this.takeAim(pane, ok))) return;
+    await this.wait(0.35);
+    this.sounds?.hit(this.falloff(h.doorstep));
+    await this.lightsOut(h);
+    await this.wait(1.2);
+    if (!ok()) return;
+    await this.goHome(me);
+  }
+
+  /** 猎人白天开枪 (seen by everyone): aim at the player, fire; they drop and a grave takes their place. */
+  async dayShot(id: number): Promise<void> {
+    const epoch = this.epoch;
+    const a = this.actors[id];
+    const ok = () => epoch === this.epoch && a.status === 'alive';
+    const p = (this.anchor(a) ?? a.base).clone();
+    this.shot = { target: p.clone().setY(1.1), until: this.time + 60, dist: 16, band: 0.3 };
+    this.yawGoal = Math.atan2(-p.x, -p.z);
+    this.resetView(false);
+    this.pitchGoal = 0.32;
+    await this.wait(1.1);
+    if (!ok()) return;
+    if (!(await this.takeAim(p.clone().setY(1.2), ok))) return;
+    this.sounds?.hit(1);
+    const body = a.wolf.visible ? a.wolf : a.sprite;
+    const away = p.clone().sub(this.camera.position).setY(0).normalize();
+    this.fx.blood(p.clone().setY(1.2), away, 0.35);
+    const side = Math.random() < 0.5 ? 1 : -1;
+    await this.tween(0.4, (k) => {
+      body.rotation.z = side * (Math.PI / 2) * k * k;
+    });
+    await this.wait(0.5);
+    if (epoch !== this.epoch) return;
+    body.rotation.z = 0;
+    this.fx.puff(p);
+    this.killed(id);
+    await this.wait(1.4);
+    if (epoch === this.epoch) this.shot = null;
+  }
+
   /** One leap at the door and back. */
   private async lunge(body: THREE.Mesh, from: THREE.Vector3, door: THREE.Vector3, reach: number) {
     const to = from.clone().lerp(door, reach);
+    const tex = (body.material as THREE.MeshStandardMaterial).map!;
+    setFrame(tex, 1);
     await this.tween(0.16, (k) => {
       body.position.lerpVectors(from, to, k * k);
       body.position.y = Math.sin(k * Math.PI) * 0.5;
     });
+    setFrame(tex, 2);
     await this.tween(0.28, (k) => {
       body.position.lerpVectors(to, from, 1 - (1 - k) * (1 - k));
       body.position.y = 0;
     });
+    setFrame(tex, 0);
   }
 
   /** The door jumps on its hinges under a blow. */
@@ -564,6 +830,7 @@ export class Stage {
   }
 
   resetAll() {
+    this.epoch++;
     for (const a of this.actors) {
       a.status = 'alive';
       a.gen++;
@@ -571,10 +838,19 @@ export class Stage {
       a.sprite.position.copy(a.base);
       a.wolf.visible = false;
       a.grave.visible = false;
+      for (const body of [a.sprite, a.wolf]) {
+        body.rotation.z = 0;
+        setFrame((body.material as THREE.MeshStandardMaterial).map!, 0);
+      }
     }
     this.fx.reset();
     this.shot = null;
     this.shield.hide();
+    this.magic.reset();
+    this.aimAt = null;
+    this.reticle.stop();
+    for (const skin of this.skins.values()) skin.restore();
+    this.skins.clear();
     for (const h of this.town.houses) {
       h.group.visible = true;
       h.lit = true;
@@ -643,14 +919,21 @@ export class Stage {
     const dist = from.distanceTo(to);
     if (dist < 0.05) return Promise.resolve();
     const dir = to.clone().sub(from);
+    const tex = (body.material as THREE.MeshStandardMaterial).map!;
     return this.tween(dist / speed, (k) => {
       if (!alive()) return;
       body.position.lerpVectors(from, to, k);
+      // one step per half-period of the bob: the foot is up (frame 1 / 2, alternating) mid-step
+      const steps = (k * dist * 3.2) / Math.PI;
+      const mid = Math.abs((steps % 1) - 0.5) < 0.3;
+      setFrame(tex, mid ? (Math.floor(steps) % 2 ? 2 : 1) : 0);
       body.position.y = Math.abs(Math.sin(k * dist * 3.2)) * 0.09;
       const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
       body.scale.x = dir.dot(right) >= 0 ? 1 : -1;
     }).then(() => {
-      if (alive()) body.position.y = 0;
+      if (!alive()) return;
+      body.position.y = 0;
+      setFrame(tex, 0);
     });
   }
 
@@ -694,7 +977,7 @@ export class Stage {
   /** Dress each seat as its persona (called when a game starts). */
   setLooks(looks: Look[]) {
     looks.forEach((look, i) => {
-      const tex = pixelTexture(characterCanvas(look));
+      const tex = sheetTexture(characterSheet(look));
       const sprite = this.actors[i].sprite;
       const m = sprite.material as THREE.MeshStandardMaterial;
       m.map?.dispose();
@@ -839,6 +1122,7 @@ export class Stage {
     this.atmo.update(dt, t);
     this.fx.update(dt, t);
     this.shield.update(dt, t);
+    this.magic.update(dt, t);
     this.stepTweens(dt);
     for (const w of this.town.windows) w.emissiveIntensity = THREE.MathUtils.lerp(0.15, 2.2, n);
     for (const h of this.town.houses) {
@@ -947,6 +1231,11 @@ export class Stage {
     this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.05, 1.25, n);
 
     this.composer.render(dt);
+
+    if (this.aimAt) {
+      const p = this.aimAt.clone().project(this.camera);
+      this.reticle.update(dt, ((p.x + 1) / 2) * this.host.clientWidth, ((1 - p.y) / 2) * this.host.clientHeight);
+    }
 
     if (this.onFrame) {
       const rect = this.renderer.domElement.getBoundingClientRect();
