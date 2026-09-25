@@ -34,6 +34,11 @@ describe('cleanSpeech', () => {
     expect(cleanSpeech('*打了个嗝，眯着眼*\n我觉得5号是狼。', view, '艾德')).toBe('我觉得5号是狼。');
     expect(cleanSpeech('（清了清嗓子）我是好人。', view, '艾德')).toBe('我是好人。');
   });
+  it('removes a trailing self-reported word count', () => {
+    expect(cleanSpeech('我票先记6号，请5号接唱。\n\n（约190字）', view, '艾德')).toBe('我票先记6号，请5号接唱。');
+    expect(cleanSpeech('我是好人。(共120字)', view, '艾德')).toBe('我是好人。');
+    expect(cleanSpeech('我查验了3号，查杀。', view, '艾德')).toBe('我查验了3号，查杀。');
+  });
   it('keeps colons that are part of the speech', () => {
     expect(cleanSpeech('我的结论：5号是狼', view, '艾德')).toBe('我的结论：5号是狼');
   });

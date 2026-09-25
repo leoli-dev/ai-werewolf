@@ -303,6 +303,8 @@ export function cleanSpeech(text: string, view: PlayerView, personaName: string)
   }
   // stage directions the model sometimes adds: *打了个嗝*, （眯着眼）
   s = s.replace(/\*[^*\n]{0,80}\*/g, '').replace(/^[（(][^）)\n]{0,40}[）)]\s*/, '').trim();
+  // a self-reported length echoing the prompt's word cap: （约190字）
+  s = s.replace(/\s*[（(【\[]\s*(?:约|共|全文|字数[:：]?)?\s*\d+\s*字\s*(?:左右)?\s*[）)】\]]$/, '').trim();
   s = s.replace(/^["“「]+|["”」]+$/g, '');
   return s.slice(0, 400);
 }
