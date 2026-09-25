@@ -95,6 +95,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .msg .kind.fallback { color: var(--wolf); border-color: var(--blood); }
 
 #topright { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }
+#topright .short { display: none; }
+#dock { display: none; }
 
 /* ── chat / transcript (right) ── */
 #chat { position: fixed; right: 16px; top: 64px; bottom: 16px; width: 380px; display: flex; flex-direction: column; }
@@ -263,3 +265,126 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .msg.said .kind { color: inherit; border-color: currentColor; opacity: 0.7; font-weight: 400; margin-left: 4px; }
 .msg.said .kind.fallback { color: #9a2a22; opacity: 1; }
 .msg.said .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ───────────── phones: top bar + bottom dock, HUD and log fold into sheets ─────────────
+   (keep the query in step with MOBILE in hud.ts) */
+@media (max-width: 760px), (max-height: 520px) {
+  #app {
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+    --top-h: calc(var(--safe-t) + 70px);
+    --dock-h: calc(var(--safe-b) + 50px);
+  }
+  /* typing: the keyboard takes the dock's place */
+  #app:has(#action textarea:focus) { --dock-h: 0px; }
+  #app:has(#action textarea:focus) #dock { display: none; }
+
+  /* top bar: phase on the left, buttons on the right */
+  #banner {
+    top: calc(var(--safe-t) + 8px); left: calc(var(--safe-l) + 8px); right: calc(var(--safe-r) + 150px);
+    transform: none; min-width: 0; padding: 6px 10px; text-align: left;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px;
+  }
+  #banner .phase { font-size: 15px; letter-spacing: 0.08em; order: -1; white-space: nowrap; }
+  #banner .clock { margin: 0; font-size: 10px; }
+  #banner .actor { flex-basis: 100%; font-size: 11px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #topright { top: calc(var(--safe-t) + 8px); right: calc(var(--safe-r) + 8px); gap: 6px; }
+  #topright .engine { display: none; }
+  #topright .btn { min-width: 40px; height: 40px; padding: 0 8px; }
+  #topright .long { display: none; }
+  #topright .short { display: inline; }
+
+  /* bottom dock */
+  #dock {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: var(--dock-h);
+    padding: 4px calc(var(--safe-r) + 6px) calc(var(--safe-b) + 4px) calc(var(--safe-l) + 6px); gap: 6px;
+    border-width: 2px 0 0; box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.45); backdrop-filter: blur(6px);
+  }
+  .dock-tab {
+    flex: 1; position: relative; display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: #1d1713; border: 2px solid var(--edge); font-size: 14px; letter-spacing: 0.1em; cursor: pointer;
+  }
+  .dock-tab.on { background: #3a2c20; border-color: var(--gold); color: #fff1d0; }
+  .dock-role { font-size: 12px; font-weight: 900; letter-spacing: 0.04em; }
+  .dock-role.wolf { color: var(--wolf); }
+  .dock-role.good { color: var(--gold); }
+  .dock-tab .badge {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--blood); color: #fff;
+    font-family: var(--pixel); font-size: 10px; letter-spacing: 0; display: inline-grid; place-items: center;
+  }
+
+  /* sheets: pulled up from the dock, sitting above the action panel */
+  #hud, #chat {
+    display: none; left: calc(var(--safe-l) + 6px); right: calc(var(--safe-r) + 6px); top: auto; width: auto;
+    bottom: calc(var(--dock-h) + var(--kb, 0px) + var(--action-h, 0px) + 6px);
+    max-height: calc(100dvh - var(--top-h) - var(--dock-h) - var(--kb, 0px) - var(--action-h, 0px) - 12px);
+    animation: sheet 0.2s ease-out; z-index: 5; /* above the night-turn announcement */
+  }
+  #app[data-sheet="players"] #hud { display: flex; }
+  #app[data-sheet="chat"] #chat { display: flex; height: 62dvh; }
+  @keyframes sheet { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+  #hud { gap: 6px; }
+  .role-card { grid-template-columns: 44px 1fr; padding: 8px; flex: none; }
+  .role-card canvas { width: 44px; height: 66px; }
+  .role-card .role { font-size: 18px; }
+  .roster { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 4px; align-content: start; min-height: 0; }
+  .roster-row { grid-template-columns: 24px 1fr; gap: 0 6px; padding: 4px; min-height: 40px; align-content: center; }
+  .roster-row .num { grid-row: span 2; }
+  .roster-row .tag:empty { display: none; }
+  #chat .tab { padding: 7px 12px; font-size: 13px; }
+  #chat .log { overscroll-behavior: contain; }
+  #chat .filter:empty { display: none; }
+  #chat .filter button { padding: 4px 6px; }
+
+  /* action panel: full width over the dock (and over the keyboard while typing) */
+  #action {
+    left: 0; right: 0; bottom: calc(var(--dock-h) + var(--kb, 0px)); transform: none; width: auto; min-width: 0;
+    padding: 10px calc(var(--safe-r) + 12px) 10px calc(var(--safe-l) + 12px); border-width: 2px 0 0;
+    max-height: calc(100dvh - var(--top-h) - var(--dock-h) - var(--kb, 0px)); overflow-y: auto;
+  }
+  #action.show { animation: rise-m 0.2s ease-out; }
+  @keyframes rise-m { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+  #action .hint { font-size: 12px; margin-bottom: 6px; }
+  #action .targets { gap: 5px; }
+  #action .targets .btn { min-width: 44px; min-height: 40px; flex: 1 0 44px; max-width: 64px; }
+  #action textarea { font-size: 16px; min-height: 60px; max-height: 30dvh; } /* ≥16px: iOS won't zoom in */
+  #action .row { flex-wrap: wrap; margin-top: 6px; }
+  #action .row .btn { min-height: 40px; }
+
+  /* the town: smaller name plates and bubbles */
+  .label .plate { font-size: 10px; padding: 0 4px; }
+  .label .plate .n { width: 15px; height: 15px; font-size: 9px; }
+  .label .bubble { max-width: min(190px, 52vw); max-height: 26dvh; font-size: 11px; padding: 4px 7px; }
+  #nightstep { font-size: 28px; letter-spacing: 0.3em; padding-left: 0.3em; top: 30%; }
+  .toast { top: calc(var(--top-h, 70px) + 8px); width: max-content; max-width: calc(100vw - 24px); }
+
+  /* modals and forms */
+  .modal { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .modal h1 { font-size: 26px; }
+  .form { grid-template-columns: 1fr; gap: 4px; }
+  .form > label:not(.check) { margin-top: 8px; }
+  .form input:not([type="checkbox"]), .form select, .modal.key-dialog input { font-size: 16px; }
+  .engine-cfg .inline { flex-wrap: wrap; }
+  .engine-cfg .inline > select { flex: 1 1 100%; width: 100%; }
+  .seg { flex-wrap: wrap; }
+  .modal .actions { flex-wrap: wrap; }
+  .modal .actions .btn { flex: 1 1 auto; min-height: 42px; }
+  .winner { font-size: 30px; }
+  .reveal { grid-template-columns: repeat(3, 1fr); }
+  .title-menu { margin-top: 24px; }
+  .title-opt { padding: 13px 16px; }
+}
+
+/* landscape phone: the sheet takes the right side, the action panel the left */
+@media (max-height: 520px) and (orientation: landscape) {
+  #app { --top-h: calc(var(--safe-t) + 56px); --dock-h: calc(var(--safe-b) + 44px); }
+  #banner { right: auto; max-width: 46vw; }
+  #banner .actor { flex-basis: auto; }
+  #hud, #chat { left: auto; width: min(400px, 46vw); bottom: calc(var(--dock-h) + var(--kb, 0px) + 6px); max-height: calc(100dvh - var(--safe-t) - var(--dock-h) - var(--kb, 0px) - 64px); }
+  #app[data-sheet="chat"] #chat { height: calc(100dvh - var(--safe-t) - var(--dock-h) - var(--kb, 0px) - 64px); }
+  #action { right: auto; bottom: calc(var(--safe-b) + var(--kb, 0px)); width: min(560px, 52vw); max-height: calc(100dvh - var(--top-h) - var(--kb, 0px)); border-width: 2px 2px 0 0; }
+  .roster { grid-template-columns: 1fr 1fr 1fr; }
+  #dock { left: auto; width: min(400px, 46vw); border-width: 2px 0 0 2px; }
+}
