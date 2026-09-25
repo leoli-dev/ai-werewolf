@@ -178,7 +178,9 @@ export function buildChatBody(i: ChatBodyInput): Record<string, unknown> {
       else body.temperature = i.temperature;
       break;
     case 'local':
-      body.max_tokens = i.maxTokens;
+      // local servers also count thinking against max_tokens (Qwen3 at `low` easily
+      // thinks past a 1000-token vote cap, leaving an empty answer)
+      body.max_tokens = i.maxTokens + (thinking ? thinkingBudget(i.effort) : 0);
       body.temperature = i.temperature;
       if (thinking) body.reasoning_effort = i.effort;
       // Qwen-style servers: ask the chat template to skip thinking entirely (ignored elsewhere)
