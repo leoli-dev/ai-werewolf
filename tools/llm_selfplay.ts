@@ -1,18 +1,20 @@
 /**
  * Headless all-AI game against a real OpenAI-compatible endpoint, to check
  * prompt quality and per-phase latency without the browser.
- * Usage: npx tsx tools/llm_selfplay.ts [seed] [wolfChatRounds]
+ * Usage: npx tsx tools/llm_selfplay.ts [seed] [wolfChatRounds] [days]
+ * `days` stops the game once that day's speeches are done (before the vote).
  */
 import { LLMAgent } from '../src/ai/llmAgent';
 import { PERSONAS } from '../src/personas';
 import { existsSync } from 'node:fs';
 import { OpenAICompatibleProvider, SerialQueue } from '../src/ai/provider';
 import { envProvider } from '../src/config';
-import { Game } from '../src/game/game';
+import { Game, GameAborted } from '../src/game/game';
 import { ROLE_NAME, seat } from '../src/game/types';
 
 const seed = Number(process.argv[2] ?? 1);
 const rounds = Number(process.argv[3] ?? 5);
+const days = Number(process.argv[4] ?? 0);
 // same connection settings as the game: .env (falls back to the committed .env.example)
 process.loadEnvFile(existsSync('.env') ? '.env' : '.env.example');
 const env = envProvider();
@@ -32,6 +34,7 @@ const game = new Game(
       const who = e.speaker !== undefined ? `${seat(e.speaker)}(${ROLE_NAME[game.players[e.speaker].role]}) ` : '';
       const vis = e.visibility.kind === 'private' ? `[→${e.visibility.to.map((i) => i + 1).join(',')}] ` : '';
       console.log(`D${e.day} ${e.type.padEnd(8)} ${vis}${who}${e.text}`);
+      if (days && e.day >= days && e.type === 'gm' && e.text.startsWith('发言结束')) game.abort();
     },
   },
 );
@@ -48,7 +51,10 @@ game.setAgents(
   ),
 );
 const t0 = Date.now();
-const winner = await game.run();
+const winner = await game.run().catch((e) => {
+  if (e instanceof GameAborted) return `stopped after day ${days}`;
+  throw e;
+});
 console.log(`\nWINNER: ${winner}  total ${(Date.now() - t0) / 1000}s  failures=${failures}`);
 for (const [k, v] of Object.entries(stats)) {
   const avg = v.reduce((a, b) => a + b, 0) / v.length;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent, PlayerView, TargetRequest } from '../game/types';
-import { cleanSpeech, parseTarget, speechProgress, speechTask } from './prompts';
+import { cleanSpeech, parseTarget, sharedNotebook, speechProgress, speechTask, systemPrompt } from './prompts';
 
 const req = (candidates: number[], allowSkip = true): TargetRequest => ({
   kind: 'target', action: 'vote', day: 1, candidates, allowSkip, prompt: '',
@@ -99,5 +99,36 @@ describe('wolf chat task', () => {
   });
   it('just passes in later rounds when nothing new was said', () => {
     expect(speechTask(req(2), view([chat(4, '刀 6 号'), chat(2, '同意')]))).toContain('只回复：pass');
+  });
+});
+
+describe('day speech prompt', () => {
+  const players = Array.from({ length: 12 }, (_, id) => ({ id, name: `P${id + 1}`, alive: id !== 1 }));
+  const speech = (speaker: number, text: string) =>
+    ({ type: 'speech', day: 1, speaker, speechKind: 'discussion', text, visibility: { kind: 'public' } }) as GameEvent;
+  const view = (self: number, role: string, events: GameEvent[] = []) =>
+    ({ self: { id: self, role }, day: 1, players, events }) as unknown as PlayerView;
+  const req = { kind: 'speech', purpose: 'discussion', day: 1 } as const;
+
+  it('puts the speaker on a header line and fences the words', () => {
+    const t = sharedNotebook(view(0, 'villager', [speech(6, '6号你承认刀了4号？')]), { onlyDay: 1 });
+    expect(t).toBe('[第1天 发言] 发言人：7号（P7）\n「6号你承认刀了4号？」');
+  });
+  it('asks to check who said a quoted line', () => {
+    expect(speechTask(req, view(7, 'villager', [speech(6, '…')]))).toContain('【引用自检】');
+    expect(speechTask(req, view(7, 'villager'))).not.toContain('【引用自检】');
+  });
+  it('keeps the wolf channel secret and rules out dead seats', () => {
+    const t = speechTask(req, view(5, 'werewolf'));
+    expect(t).toContain('狼队频道的内容');
+    expect(t).toContain('不能再当作怀疑或放逐对象');
+    expect(speechTask(req, view(4, 'villager'))).not.toContain('狼队频道');
+  });
+});
+
+describe('system prompt', () => {
+  it('says town trades in names are not game roles', () => {
+    const view = { self: { id: 0, role: 'villager' }, known: {} } as unknown as PlayerView;
+    expect(systemPrompt(view, { name: '药师伊索', trait: '', look: {} as never })).toContain('药师不是女巫');
   });
 });
