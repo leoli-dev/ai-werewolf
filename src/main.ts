@@ -148,7 +148,11 @@ async function play(settings: Settings, save?: SaveGame) {
   };
   let pausing = false;
   const pause = async () => {
-    if (pausing || game.state.phase === 'ended') return;
+    if (pausing) return;
+    if (game.state.phase === 'ended') {
+      ui!.reopenEnd();
+      return;
+    }
     pausing = true;
     game.pause();
     stage.paused = true;
@@ -178,8 +182,9 @@ async function play(settings: Settings, save?: SaveGame) {
     game.resume();
   };
   // losing focus (switching window/tab) pauses the game
-  const onBlur = () => void pause();
-  const onVisibility = () => document.hidden && void pause();
+  // (once the game is over there is nothing to pause: leave the results / 回看记录 as they are)
+  const onBlur = () => game.state.phase !== 'ended' && void pause();
+  const onVisibility = () => document.hidden && game.state.phase !== 'ended' && void pause();
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && !document.querySelector('.modal-back')) void pause();
   };

@@ -1077,6 +1077,16 @@ export class GameUI {
   // ───────────────────────── end ─────────────────────────
 
   private endShown = false;
+  /** The results panel, once it is up (「回看记录」 takes it down; 暂停 / Esc bring it back). */
+  private endModal: HTMLElement | null = null;
+
+  /** 暂停 after the game is over: bring the results (and 回到标题画面) back. Returns false while the finale plays. */
+  reopenEnd(): boolean {
+    if (!this.endModal) return false;
+    if (!this.endModal.isConnected) this.root.appendChild(this.endModal);
+    return true;
+  }
+
   private showEnd(s: GameState) {
     if (this.endShown) return;
     this.endShown = true;
@@ -1093,7 +1103,9 @@ export class GameUI {
       audio.setEnding('good');
       finale = this.stage.goodFinale();
     }
-    void finale.then(() => setTimeout(() => {
+    // capped in real time: at a low frame rate (the GPU busy with a local model) the scene crawls
+    const cap = new Promise<void>((r) => setTimeout(r, 15000));
+    void Promise.race([finale, cap]).then(() => setTimeout(() => {
       if (this.destroyed) return; // back at the title already
       const back = h(
         'div',
@@ -1107,6 +1119,7 @@ export class GameUI {
           h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => { back.remove(); if (MOBILE.matches) this.setSheet('chat'); } }, '回看记录'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
         ),
       );
+      this.endModal = back;
       this.root.appendChild(back);
       this.renderRoster();
       this.renderChat();
