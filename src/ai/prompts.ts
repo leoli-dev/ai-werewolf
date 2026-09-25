@@ -96,6 +96,14 @@ export function todaysSpeakers(view: PlayerView): number[] {
   return [...new Set(ids)];
 }
 
+/** Tonight's wolf-chat lines from teammates after this wolf last spoke, passes left out. */
+export function teammatesSinceMe(view: PlayerView, day: number) {
+  const tonight = view.events.filter((e) => e.type === 'wolfChat' && e.day === day && e.speaker !== undefined);
+  let mine = -1;
+  tonight.forEach((e, i) => e.speaker === view.self.id && (mine = i));
+  return tonight.slice(mine + 1).filter((e) => e.text !== '（没有补充）');
+}
+
 /** 角色私本：只属于自己的信息 + 自己记下的心得。 */
 export function privateNotebook(view: PlayerView, notes: string[]): string {
   const lines: string[] = [];
@@ -126,11 +134,22 @@ function aliveList(view: PlayerView) {
 
 export function speechTask(req: SpeechRequest | WolfChatRequest, view: PlayerView): string {
   if (req.kind === 'wolfChat') {
+    const fresh = teammatesSinceMe(view, req.day);
+    const heard = fresh.length
+      ? `\n${req.round === 1 ? '在你之前' : '自你上次发言后'}，队友说了：\n${fresh.map((e) => `- ${seat(e.speaker!)}：${e.text}`).join('\n')}`
+      : '';
+    const answer = '如果有人反对当前刀口或打法、或提出了新方案，你不能 pass：点名回应，正面回答对方的理由（要么被说服并说出改成什么，要么讲清为什么坚持）。';
+    const task =
+      req.round === 1
+        ? fresh.length
+          ? `先回应在你之前发言的队友，点名说同意还是反对、为什么。${answer}然后说出你的刀口和明天白天的打法。60 字以内。`
+          : '和队友商量今晚刀谁、明天白天怎么打配合（谁悍跳、怎么站边）。60 字以内，直接说内容。'
+        : fresh.length
+          ? `${answer}如果他们只是附和、没有新分歧，只回复：pass。40 字以内。`
+          : '如果刀口和打法已经一致，只回复：pass。';
     return `现在是第 ${req.day} 夜，狼队秘密频道第 ${req.round}/${req.rounds} 轮沟通（只有狼人能看到）。
-${aliveList(view)}
-${req.round === 1
-    ? '和队友商量今晚刀谁、明天白天怎么打配合（谁悍跳、怎么站边）。60 字以内，直接说内容。'
-    : '前面已经商量过（见私人记录本里的狼队记录）。如果刀口和打法已经基本一致，只回复：pass。只有存在实质分歧或新计划时才发言，40 字以内。'}`;
+${aliveList(view)}${heard}
+${task}`;
   }
   const what = {
     discussion: '现在轮到你白天发言。分析局势，给出你的怀疑对象和理由，也可以根据策略表明（或伪装）身份。',

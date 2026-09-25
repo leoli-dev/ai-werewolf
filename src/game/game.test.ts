@@ -230,6 +230,49 @@ describe('Game engine', () => {
     expect(humanRounds).toEqual([1, 2]);
   });
 
+  it('an objection from the human in the last wolf-chat round gets one more AI round to answer it', async () => {
+    const aiRounds: { round: number; rounds: number; sawObjection: boolean }[] = [];
+    const agent: Agent = {
+      speak: async (r, v) => {
+        if (r.kind === 'wolfChat') aiRounds.push({ round: r.round, rounds: r.rounds, sawObjection: v.events.some((e) => e.text === '我不同意！') });
+        return r.kind === 'wolfChat' && r.round === 1 ? '刀 12 号' : 'pass';
+      },
+      choose: async (r) => {
+        if (r.day > 1) throw new Error('stop');
+        return r.allowSkip ? null : r.candidates[r.candidates.length - 1];
+      },
+    };
+    const human: Agent = {
+      speak: async (r) => (r.kind === 'wolfChat' && r.round === 2 ? '我不同意！' : '同意'),
+      choose: agent.choose,
+    };
+    const g = new Game({ names, humanSeat: 0, humanRole: 'werewolf', seed: 5, wolfChatRounds: 2 });
+    g.setAgents(names.map((_, i) => (i === 0 ? human : agent)));
+    await g.run().catch(() => {});
+    const extra = aiRounds.filter((r) => r.round === 3);
+    expect(extra).toHaveLength(3);
+    expect(extra.every((r) => r.rounds === 3 && r.sawObjection)).toBe(true);
+  });
+
+  it('the human wolf votes last and sees the AI wolves\' picks first', async () => {
+    const order: number[] = [];
+    let humanPrompt = '';
+    const choose = (id: number) => async (r: TargetRequest) => {
+      if (r.day > 1) throw new Error('stop');
+      if (r.action === 'wolfKill') order.push(id);
+      if (id === 0 && r.action === 'wolfKill') humanPrompt = r.prompt;
+      return r.allowSkip ? null : r.candidates[r.candidates.length - 1];
+    };
+    const g = new Game({ names, humanSeat: 0, humanRole: 'werewolf', seed: 5, wolfChatRounds: 1 });
+    g.setAgents(names.map((_, i) => ({ speak: async () => 'pass', choose: choose(i) })));
+    await g.run().catch(() => {});
+    const wolves = g.players.filter((p) => p.role === 'werewolf').map((p) => p.id);
+    expect(order.at(-1)).toBe(0);
+    expect(order.slice().sort((a, b) => a - b)).toEqual(wolves);
+    expect(humanPrompt).toMatch(/^队友已投：/);
+    expect(g.events.some((e) => e.type === 'wolfChat' && e.text.startsWith('队友已投：'))).toBe(true);
+  });
+
   it('tells each day speaker the round order and who has already spoken', async () => {
     const g = new Game({ names, humanSeat: -1, seed: 11, wolfChatRounds: 1 });
     const seen: { id: number; order: number[]; spoken: number[]; purpose: string }[] = [];

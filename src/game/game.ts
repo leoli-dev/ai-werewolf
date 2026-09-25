@@ -539,27 +539,44 @@ export class Game {
     await this.cue('wolvesOut');
     const day = this.state.day;
     if (wolves.length > 1) {
-      for (let round = 1; round <= this.wolfChatRounds; round++) {
+      let rounds = this.wolfChatRounds;
+      for (let round = 1; round <= rounds; round++) {
         // from round 2 the human (if a wolf) speaks last, after seeing what the AI wolves added;
         // if they all passed the human gets a one-click "no addition, vote now"
-        const order = round === 1 ? wolves : [...wolves.filter((w) => !w.isHuman), ...wolves.filter((w) => w.isHuman)];
+        const extra = round > this.wolfChatRounds;
+        const order = round === 1 ? wolves : [...wolves.filter((w) => !w.isHuman), ...(extra ? [] : wolves.filter((w) => w.isHuman))];
         let passes = 0;
         let spoken = 0;
+        let humanSpoke = false;
         for (const w of order) {
           const othersPassed = round > 1 && spoken > 0 && passes === spoken;
-          const text = (await this.ask(w.id, { kind: 'wolfChat', round, rounds: this.wolfChatRounds, day, othersPassed }, `狼队沟通 ${round}/${this.wolfChatRounds}`)) as string;
+          const text = (await this.ask(w.id, { kind: 'wolfChat', round, rounds, day, othersPassed }, `狼队沟通 ${round}/${rounds}`)) as string;
           const bare = isPass(text);
+          const passed = bare || isWolfPass(text);
           spoken++;
-          if (bare || /^\s*(pass|过)/i.test(text) || (text.length <= 30 && /没有?补充|没意见|pass/i.test(text))) passes++;
+          if (passed) passes++;
+          else if (w.isHuman) humanSpoke = true;
           this.emit('wolfChat', bare ? '（没有补充）' : text, channel, { speaker: w.id, data: this.lastSpeechFallback ? { fallback: true } : undefined });
         }
         if (passes === spoken) break; // nobody had anything to add: go straight to the vote
+        // the human had the last word of the last round: give the AI wolves one more turn to answer it
+        if (round === rounds && humanSpoke && !extra) rounds++;
       }
     }
     const cands = this.aliveIds();
     const votes = new Map<number, number>();
-    for (const w of wolves) {
+    // AI wolves vote first; a living human wolf sees their picks (like wolves pointing at night) and votes last
+    const ai = wolves.filter((w) => !w.isHuman);
+    const human = wolves.filter((w) => w.isHuman);
+    for (const w of ai) {
       const t = (await this.askTarget(w.id, 'wolfKill', cands, false, '投票选择今晚要杀的玩家（可以选择狼队友）。', '狼队投票中'))!;
+      votes.set(w.id, t);
+    }
+    const aiVotes = ai.map((w) => `${seat(w.id)}→${seat(votes.get(w.id)!)}`).join('，');
+    if (human.length && ai.length) this.emit('wolfChat', `队友已投：${aiVotes}。`, channel);
+    for (const w of human) {
+      const prompt = ai.length ? `队友已投：${aiVotes}。投票选择今晚要杀的玩家（可以选择狼队友）。` : '投票选择今晚要杀的玩家（可以选择狼队友）。';
+      const t = (await this.askTarget(w.id, 'wolfKill', cands, false, prompt, '狼队投票中'))!;
       votes.set(w.id, t);
     }
     const tally = new Map<number, number>();
@@ -700,6 +717,11 @@ export class Game {
 
 export function isPass(text: string): boolean {
   return /^\s*(pass|过|结束)\s*[。.!！]?\s*$/i.test(text);
+}
+
+/** A wolf-chat line that adds nothing: "pass", "过…", or a short "没有补充 / 没意见". */
+export function isWolfPass(text: string): boolean {
+  return /^\s*(pass|过)/i.test(text) || (text.length <= 30 && /没有?补充|没意见|pass/i.test(text));
 }
 
 export function canSee(v: Visibility, id: number): boolean {

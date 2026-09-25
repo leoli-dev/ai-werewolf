@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PlayerView, TargetRequest } from '../game/types';
-import { cleanSpeech, parseTarget, speechProgress } from './prompts';
+import type { GameEvent, PlayerView, TargetRequest } from '../game/types';
+import { cleanSpeech, parseTarget, speechProgress, speechTask } from './prompts';
 
 const req = (candidates: number[], allowSkip = true): TargetRequest => ({
   kind: 'target', action: 'vote', day: 1, candidates, allowSkip, prompt: '',
@@ -76,5 +76,28 @@ describe('speechProgress', () => {
     const text = speechProgress({ kind: 'speech', purpose: 'defense', day: 1, order: [2, 9], spoken: [] }, view(2));
     expect(text).toContain('平票玩家：3号、10号');
     expect(text).toContain('还有 1 位平票玩家正名');
+  });
+});
+
+describe('wolf chat task', () => {
+  const chat = (speaker: number, text: string) =>
+    ({ type: 'wolfChat', day: 1, speaker, text, visibility: { kind: 'private', to: [2, 4, 9] } }) as GameEvent;
+  const view = (events: GameEvent[]) =>
+    ({ self: { id: 2 }, day: 1, players: [2, 4, 9].map((id) => ({ id, name: '', alive: true })), events }) as unknown as PlayerView;
+  const req = (round: number) => ({ kind: 'wolfChat', round, rounds: 3, day: 1 }) as const;
+
+  it('quotes teammates who spoke since my last line and forbids passing over an objection', () => {
+    const t = speechTask(req(2), view([chat(4, '刀 6 号'), chat(2, '同意'), chat(9, '（没有补充）'), chat(4, '我不同意，改刀 7')]));
+    expect(t).toContain('5号：我不同意，改刀 7');
+    expect(t).not.toContain('刀 6 号');
+    expect(t).not.toContain('没有补充');
+    expect(t).toContain('不能 pass');
+  });
+  it('asks round-1 speakers to answer the teammates before them', () => {
+    expect(speechTask(req(1), view([chat(4, '刀 6 号')]))).toContain('先回应在你之前发言的队友');
+    expect(speechTask(req(1), view([]))).not.toContain('队友说了');
+  });
+  it('just passes in later rounds when nothing new was said', () => {
+    expect(speechTask(req(2), view([chat(4, '刀 6 号'), chat(2, '同意')]))).toContain('只回复：pass');
   });
 });
