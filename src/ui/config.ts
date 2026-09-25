@@ -47,6 +47,8 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         ),
       );
     renderPace();
+    const stepSpeech = h('input', { type: 'checkbox', checked: getConfig().stepSpeech }) as HTMLInputElement;
+    stepSpeech.onchange = () => updateConfig({ stepSpeech: stepSpeech.checked });
 
     // ── AI engine ──
     // in a game, show the mode the table was seated with
@@ -260,7 +262,12 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         h('label', {}, '环境（风雨雷）'), slider('ambience'),
       ),
       h('h2', {}, '游戏'),
-      h('div', { class: 'form' }, h('label', {}, '节奏'), h('div', { class: 'inline' }, pace, hintText('GM 每一步之间的停顿'))),
+      h(
+        'div',
+        { class: 'form' },
+        h('label', {}, '节奏'), h('div', { class: 'inline' }, pace, hintText('GM 每一步之间的停顿')),
+        h('label', {}, 'AI 发言'), h('label', { class: 'check' }, stepSpeech, '白天逐条查看：点「下一位发言」才出现下一段'),
+      ),
       h('h2', {}, 'AI 引擎'),
       env.missing.length ? h('p', { class: 'test-result err' }, `.env 缺少 ${env.missing.join('、')}（参考 .env.example）：本地 LLM 的默认地址/模型可能为空。`) : null,
       h(

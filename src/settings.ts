@@ -31,6 +31,8 @@ export interface LlmProfile {
 export interface Config {
   mode: 'llm' | 'offline';
   paceMs: number;
+  /** Day: hold each AI speech until the human asks for the next one. */
+  stepSpeech: boolean;
   audio: AudioLevels;
   llm: { active: ProviderId; profiles: Record<ProviderId, LlmProfile> };
 }
@@ -112,6 +114,7 @@ function loadConfig(): Config {
   return {
     mode: saved.mode ?? legacy.mode ?? 'llm',
     paceMs: saved.paceMs ?? legacy.paceMs ?? 900,
+    stepSpeech: saved.stepSpeech ?? true,
     audio: { ...DEFAULT_AUDIO, muted: legacyMuted, ...saved.audio },
     llm: {
       active: PROVIDER_IDS.includes(saved.llm?.active as ProviderId) && providerAvailable(saved.llm!.active) ? saved.llm!.active : providerAvailable('local') ? 'local' : 'openai',
@@ -138,7 +141,7 @@ function changed() {
   for (const fn of listeners) fn(current);
 }
 
-export function updateConfig(patch: Partial<Pick<Config, 'mode' | 'paceMs'>> & { audio?: Partial<AudioLevels> }) {
+export function updateConfig(patch: Partial<Pick<Config, 'mode' | 'paceMs' | 'stepSpeech'>> & { audio?: Partial<AudioLevels> }) {
   current = { ...current, ...patch, audio: { ...current.audio, ...patch.audio } };
   changed();
 }

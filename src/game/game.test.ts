@@ -92,6 +92,26 @@ describe('Game engine', () => {
     expect(wins.good + wins.wolf).toBe(300);
   });
 
+  it('every day speech waits for the host before it is heard', async () => {
+    const released: number[] = [];
+    const heard: number[] = [];
+    const g = new Game(
+      { names, humanSeat: -1, seed: 5, wolfChatRounds: 2 },
+      {
+        beforeSpeech: async (id) => void released.push(id),
+        onEvent: (e) => {
+          if (e.type !== 'speech') return;
+          expect(released.at(-1)).toBe(e.speaker); // released right before it lands
+          heard.push(e.speaker!);
+        },
+      },
+    );
+    g.setAgents(names.map((_, i) => new MockAgent(i)));
+    await g.run();
+    expect(heard.length).toBeGreaterThan(0);
+    expect(released).toHaveLength(heard.length);
+  });
+
   it('a wolf self-destructing ends the day: rest of the speeches and the vote are skipped', async () => {
     for (let seed = 1; seed <= 20; seed++) {
       const g = new Game({ names, humanSeat: -1, seed, wolfChatRounds: 1 });
