@@ -397,6 +397,7 @@ export class Game {
 
   /** Returns true if the game ended. */
   private endIfWon(): boolean {
+    if (this.state.phase === 'ended') return true; // already announced (e.g. by the exile, then again by the main loop)
     const w = this.checkWinner();
     if (!w) return false;
     this.state.winner = w;
