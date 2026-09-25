@@ -132,6 +132,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 #action textarea { width: 100%; min-height: 72px; resize: vertical; background: #120f0d; border: 2px solid var(--edge); padding: 8px; line-height: 1.5; }
 #action .row { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 8px; }
 #action .row .count { margin-right: auto; font-size: 11px; color: var(--ink-faint); }
+#action .next-speech { display: flex; align-items: center; gap: 12px; }
+#action .next-speech .hint { margin: 0 auto 0 0; }
+#action .next-speech .btn { min-height: 40px; padding: 0 18px; }
 
 /* ── head labels ── */
 .label { position: absolute; transform: translate(-50%, -100%); display: flex; flex-direction: column; align-items: center; gap: 2px; transition: opacity 0.2s; }

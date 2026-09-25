@@ -92,6 +92,7 @@ async function play(settings: Settings, save?: SaveGame) {
       onState: (s) => ui?.onState(s),
       cue: (c) => ui?.cue(c) ?? Promise.resolve(),
       restored: () => ui?.restored(),
+      beforeSpeech: (id) => ui?.holdSpeech(id) ?? Promise.resolve(),
     },
   );
 

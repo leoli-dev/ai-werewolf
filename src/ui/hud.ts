@@ -128,6 +128,10 @@ export class GameUI {
   private unread = 0;
   /** Label tapped last (touch has no hover to bring a buried bubble to the front). */
   private raised: number | null = null;
+  /** An AI's day speech is on screen that the human hasn't moved past yet. */
+  private unreadSpeech = false;
+  /** A ready speech held back until the human asks for it (see holdSpeech). */
+  private held: { speaker: number; release: () => void } | null = null;
   private cleanups: (() => void)[] = [];
 
   constructor(
@@ -237,6 +241,52 @@ export class GameUI {
     }
     this.renderTabs();
     this.renderRoster();
+    this.bindNextSpeech();
+  }
+
+  /** Space / Enter / → reveals a held speech; switching 逐条查看 off lets it through. */
+  private bindNextSpeech() {
+    const onKey = (e: KeyboardEvent) => {
+      if (!this.held || e.repeat || !['Enter', ' ', 'ArrowRight'].includes(e.key)) return;
+      if ((e.target as HTMLElement).closest?.('input, textarea, select, button, .modal-back')) return;
+      e.preventDefault();
+      this.held.release();
+    };
+    document.addEventListener('keydown', onKey);
+    this.cleanups.push(() => document.removeEventListener('keydown', onKey));
+    this.cleanups.push(onConfigChange((c) => {
+      if (!c.stepSpeech) this.held?.release();
+    }));
+  }
+
+  /**
+   * Hold a ready AI day speech until the human asks for it, so the cloud models'
+   * lines don't pile up faster than they can be read. The first speech after a
+   * break (the human's own turn, a vote) comes through at once.
+   */
+  holdSpeech(speaker: number): Promise<void> {
+    if (speaker === this.me || !this.unreadSpeech || !getConfig().stepSpeech) return Promise.resolve();
+    return new Promise((resolve) => {
+      const release = () => {
+        if (this.held?.release !== release) return;
+        this.held = null;
+        this.unreadSpeech = false;
+        this.close();
+        resolve();
+      };
+      this.held = { speaker, release };
+      const p = this.game.players[speaker];
+      // no chime: this is a reading aid, not a decision
+      this.action.replaceChildren(
+        h(
+          'div',
+          { class: 'next-speech' },
+          h('div', { class: 'hint' }, `${seat(speaker)} ${p.name} 已准备好发言`),
+          h('button', { class: 'btn primary', onclick: release }, '查看下一位发言 ▶'),
+        ),
+      );
+      this.action.classList.add('show');
+    });
   }
 
   /**
@@ -434,6 +484,8 @@ export class GameUI {
       setTimeout(() => (peaceful ? audio.peaceful() : audio.death()), 2600);
     }
     if (!this.canSee(e)) return;
+    if (e.type === 'speech') this.unreadSpeech = e.speaker !== this.me;
+    else if (e.type === 'vote') this.unreadSpeech = false;
     this.trackBubble(e);
     if (this.matches(e)) this.appendMsg(e);
     if (e.type === 'private' || e.type === 'gm' || e.type === 'death') this.renderRoster();
@@ -491,6 +543,7 @@ export class GameUI {
       return;
     }
     const night = s.phase === 'night';
+    if (night) this.unreadSpeech = false;
     this.stage.setNight(night);
     audio.setNight(night);
     // never point the camera at a hidden night actor (it would reveal their role)
@@ -623,6 +676,8 @@ export class GameUI {
         this.blast = null;
         break;
       case 'wolvesIn':
+        // the pack stops talking once it moves on the house
+        this.bubbles.clear();
         if (this.wolvesShown.length) {
           const shown = this.wolvesShown;
           const target = this.wolfTarget;
@@ -828,7 +883,7 @@ export class GameUI {
       const pl = this.game.players[i];
       const k = this.knownOf(i);
       const b = this.bubbles.get(i);
-      const thinking = actor === i;
+      const thinking = actor === i && this.held?.speaker !== i;
       // newest words on top; hovering a bubble brings it to the front (CSS)
       el.style.zIndex = this.raised === i ? '9999' : String(b ? 10 + b.seq : 1);
       const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? b.text : ''}|${thinking}`;

@@ -78,6 +78,8 @@ export interface GameHooks {
   cue?(c: SceneCue): Promise<void>;
   /** Resumed game only: the replay has caught up, live play starts now. */
   restored?(): void;
+  /** A day speech is ready: resolve to let it be heard (the host may hold it until the human has read the last one). */
+  beforeSpeech?(speaker: number): Promise<void>;
 }
 
 export class GameAborted extends Error {}
@@ -638,6 +640,12 @@ export class Game {
     const text = (await this.ask(id, { kind: 'speech', purpose, day: this.state.day, ...seq, ...(canExplode ? { canExplode } : {}) }, label)) as string;
     const explode = canExplode && this.lastSpeechExplode;
     const data = { ...(this.lastSpeechFallback ? { fallback: true } : {}), ...(explode ? { explode: true } : {}) };
+    await this.gate();
+    if (!this.replaying && this.hooks.beforeSpeech) {
+      this.checkRestored();
+      await this.hooks.beforeSpeech(id);
+      await this.gate();
+    }
     if (!(explode && isPass(text))) this.emit('speech', text, { kind: 'public' }, { speaker: id, speechKind: purpose, data: Object.keys(data).length ? data : undefined });
     if (explode) {
       this.gm(`${seat(id)} ${this.players[id].name} 自爆，身份是狼人！本轮剩余发言与投票取消，直接进入黑夜。`);

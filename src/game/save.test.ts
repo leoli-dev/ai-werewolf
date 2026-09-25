@@ -62,14 +62,14 @@ describe('save games (seed + journal replay)', () => {
     // live pacing only resumes after the last recorded answer (the few steps that end the game)
     const g = new Game(
       { names, humanSeat: -1, seed: 7, wolfChatRounds: 2, paceMs: 40, replay: full.g.journal },
-      { cue: async () => void (live || cues++), restored: () => (live = true) },
+      { cue: async () => void (live || cues++), beforeSpeech: async () => void (live || cues++), restored: () => (live = true) },
     );
     g.setAgents(names.map(() => ({ speak: async () => (asked++, 'x'), choose: async () => (asked++, null) })));
     const t0 = performance.now();
     await g.run();
     expect(performance.now() - t0).toBeLessThan(1000);
     expect(asked).toBe(0);
-    expect(cues).toBe(0); // no scene cue while still replaying
+    expect(cues).toBe(0); // no scene cue or held speech while still replaying
     expect(transcript(g)).toEqual(transcript(full.g));
   });
 
