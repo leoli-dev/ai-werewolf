@@ -136,6 +136,8 @@ export class GameUI {
   private raised: number | null = null;
   /** An AI's day speech is on screen that the human hasn't moved past yet. */
   private unreadSpeech = false;
+  /** Who said the unread speech: the camera stays on them until the human moves on. */
+  private lastSpeaker: number | null = null;
   /** A ready speech held back until the human asks for it (see holdSpeech). */
   private held: { speaker: number; release: () => void } | null = null;
   /** The exile's last words are over: waiting for the human to send them off (see confirmExile). */
@@ -281,6 +283,8 @@ export class GameUI {
         this.held = null;
         this.unreadSpeech = false;
         this.close();
+        // only now does the camera leave the last speech for the next speaker
+        this.stage.focus(speaker);
         resolve();
       };
       this.held = { speaker, release };
@@ -523,7 +527,10 @@ export class GameUI {
       setTimeout(() => (peaceful ? audio.peaceful() : audio.death()), 2600);
     }
     if (!this.canSee(e)) return;
-    if (e.type === 'speech') this.unreadSpeech = e.speaker !== this.me;
+    if (e.type === 'speech') {
+      this.unreadSpeech = e.speaker !== this.me;
+      this.lastSpeaker = e.speaker ?? null;
+    }
     else if (e.type === 'vote') this.unreadSpeech = false;
     this.trackBubble(e);
     if (this.matches(e)) this.appendMsg(e);
@@ -589,8 +596,7 @@ export class GameUI {
     if (night) this.unreadSpeech = false;
     this.stage.setNight(night);
     audio.setNight(night);
-    // never point the camera at a hidden night actor (it would reveal their role)
-    this.stage.focus(this.visibleActor());
+    this.stage.focus(this.cameraTarget());
     this.choreograph(s);
     const phaseName: Record<string, string> = {
       setup: '准备中',
@@ -785,7 +791,17 @@ export class GameUI {
     items.replaceChildren(...chips);
   }
 
-  /** Night actors stay secret unless it is you (or god view). */
+  /**
+   * Who the camera looks at: the acting player, except while the human is still
+   * reading the last AI speech (逐条查看) — the next AI thinking doesn't pull it away.
+   */
+  private cameraTarget(): number | null {
+    const actor = this.visibleActor();
+    if (this.unreadSpeech && getConfig().stepSpeech && actor !== this.me && this.lastSpeaker !== null) return this.lastSpeaker;
+    return actor;
+  }
+
+  /** Night actors stay secret unless it is you (or god view): never point the camera at one. */
   private visibleActor(): number | null {
     const s = this.game.state;
     if (s.actor === null) return null;
