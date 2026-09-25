@@ -48,6 +48,7 @@ stage.sounds = {
   lock: () => audio.lock(),
   gunshot: () => audio.gunshot(),
   hit: (v) => audio.hit(v),
+  howl: (v, pitch) => audio.howl(v, 0, pitch),
 };
 
 // sound settings apply everywhere (title screen included)
@@ -202,6 +203,7 @@ async function play(settings: Settings, save?: SaveGame) {
   stage.paused = false;
   audio.resume();
   ui.destroy();
+  audio.setEnding(null);
   stage.resetAll();
 }
 

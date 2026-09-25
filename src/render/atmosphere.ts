@@ -24,6 +24,12 @@ export class Atmosphere {
   /** Fired when a lightning strike starts; arg = 0 (close) … 1 (far), for thunder delay. */
   onStrike?: (distance: number) => void;
   mix = 0;
+  /** 0..1 好人胜利: the fog lifts, the clouds part and the sun comes up. */
+  clear = 0;
+  /** 0..1 狼人胜利: a still, blood-red night — no rain, no lightning, a red moon. */
+  blood = 0;
+  private sun: THREE.Group;
+  private moon: THREE.Group;
 
   constructor(scene: THREE.Scene) {
     this.key.position.set(-30, 45, 25);
@@ -85,6 +91,11 @@ export class Atmosphere {
     );
     this.rain.frustumCulled = false;
     scene.add(this.rain);
+
+    // north, low over the church, where the ending shots look
+    this.sun = disc(0xfff2c0, 0xffd070, 9);
+    this.moon = disc(0xff6a50, 0xa01818, 7);
+    scene.add(this.sun, this.moon);
   }
 
   private resetDrop(i: number, anyHeight = false) {
@@ -106,7 +117,7 @@ export class Atmosphere {
     const lerpC = (a: number, b: number) => new THREE.Color(a).lerp(new THREE.Color(b), n);
 
     // lightning (night only): pattern of quick flashes
-    if (n > 0.6) {
+    if (n > 0.6 && this.blood < 0.05) {
       this.nextStrike -= dt;
       if (this.nextStrike <= 0) {
         this.strikeT = 0;
@@ -145,9 +156,11 @@ export class Atmosphere {
       m.color.copy(lerpC(0x5e636a, 0x151a26)).lerp(new THREE.Color(0xd0d8ff), L * 0.8);
     });
 
+    this.ending(n);
+
     // rain
     const rm = this.rain.material as THREE.LineBasicMaterial;
-    rm.opacity = THREE.MathUtils.clamp((n - 0.3) / 0.7, 0, 1) * 0.22 + L * 0.15;
+    rm.opacity = (THREE.MathUtils.clamp((n - 0.3) / 0.7, 0, 1) * 0.22 + L * 0.15) * (1 - this.blood) * (1 - this.clear);
     this.rain.visible = rm.opacity > 0.01;
     if (this.rain.visible) {
       const N = this.rainVel.length;
@@ -163,4 +176,78 @@ export class Atmosphere {
       this.rain.geometry.attributes.position.needsUpdate = true;
     }
   }
+
+  /** Blend the ending skies over the usual weather. */
+  private ending(n: number) {
+    const c = this.clear;
+    const b = this.blood;
+    const toward = (col: THREE.Color, hex: number, k: number) => col.lerp(new THREE.Color(hex), k);
+    const sk = this.skyMat.uniforms;
+    if (c > 0) {
+      toward(sk.top.value, 0x3f7fd0, c);
+      toward(sk.bottom.value, 0x9cc8f0, c);
+      toward(this.fog.color, 0xbcd6ec, c);
+      this.fog.density = THREE.MathUtils.lerp(this.fog.density, 0.0045, c);
+      toward(this.hemi.color, 0xcfe4ff, c);
+      toward(this.hemi.groundColor, 0x6a5a3a, c);
+      this.hemi.intensity = THREE.MathUtils.lerp(this.hemi.intensity, 2.1, c);
+      toward(this.key.color, 0xffe2b0, c);
+      this.key.intensity = THREE.MathUtils.lerp(this.key.intensity, 3.6, c);
+    }
+    if (b > 0) {
+      toward(sk.top.value, 0x12040a, b);
+      toward(sk.bottom.value, 0x4a1016, b);
+      toward(this.fog.color, 0x2a0c12, b);
+      toward(this.hemi.color, 0x8a3040, b * 0.8);
+      this.hemi.intensity = THREE.MathUtils.lerp(this.hemi.intensity, 1.15, b);
+      toward(this.key.color, 0xd05040, b * 0.8);
+      this.key.intensity = THREE.MathUtils.lerp(this.key.intensity, 0.55, b);
+    }
+    this.clouds.forEach((cl) => {
+      const m = cl.material as THREE.MeshBasicMaterial;
+      m.opacity = 0.9 * (1 - c) * (1 - b * 0.6);
+      if (b > 0) toward(m.color, 0x3a1016, b);
+      cl.visible = m.opacity > 0.01;
+    });
+    // the sun climbs out of the horizon as the fog lifts; the moon is simply there
+    const rise = THREE.MathUtils.smoothstep(c, 0.1, 1);
+    this.sun.visible = c > 0.01;
+    this.sun.position.set(-26, THREE.MathUtils.lerp(-12, 27, rise), -150);
+    setGlow(this.sun, c);
+    this.moon.visible = b > 0.01;
+    this.moon.position.set(22, 25, -150);
+    setGlow(this.moon, b * n);
+  }
+}
+
+/** A sky body: a bright disc with a soft halo, never fogged. */
+function disc(core: number, halo: number, r: number): THREE.Group {
+  const g = new THREE.Group();
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d')!;
+  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grad.addColorStop(0.25, 'rgba(255,255,255,0.35)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+  const glow = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), color: halo, transparent: true, depthWrite: false, fog: false, blending: THREE.AdditiveBlending }),
+  );
+  glow.scale.setScalar(r * 5);
+  const body = new THREE.Mesh(
+    new THREE.CircleGeometry(r, 32),
+    new THREE.MeshBasicMaterial({ color: core, transparent: true, fog: false, depthWrite: false }),
+  );
+  g.add(glow, body);
+  g.visible = false;
+  g.renderOrder = -1;
+  return g;
+}
+
+function setGlow(g: THREE.Group, k: number) {
+  const [glow, body] = g.children as [THREE.Sprite, THREE.Mesh];
+  (glow.material as THREE.SpriteMaterial).opacity = k;
+  (body.material as THREE.MeshBasicMaterial).opacity = k;
 }

@@ -8,6 +8,7 @@ import { Animals } from './animals';
 import { Atmosphere } from './atmosphere';
 import { Explosions } from './explosion';
 import { Shield } from './shield';
+import { Spring } from './spring';
 import { HouseSkin, Magic, Reticle } from './magic';
 import { PERSONAS } from '../personas';
 import { characterSheet, graveCanvas, pixelTexture, setFrame, sheetTexture, werewolfSheet, type Look } from './pixel';
@@ -86,6 +87,8 @@ interface Actor {
   /** Bumped by every new command; running sequences stop when it changes. */
   gen: number;
   phase: number;
+  /** Extra vertical stretch on top of the idle bob (a wolf rearing up to howl). */
+  pose: number;
 }
 
 /** Scene sounds, positioned by the stage (volume falls off with distance). */
@@ -118,6 +121,8 @@ export interface StageSounds {
   lock(): void;
   gunshot(): void;
   hit(vol: number): void;
+  /** 狼人胜利: a wolf howls at the moon. */
+  howl(vol: number, pitch: number): void;
 }
 
 interface Tween {
@@ -171,6 +176,11 @@ export class Stage {
   private epoch = 0;
   private town: TownRefs;
   private animals: Animals;
+  private spring: Spring;
+  /** The game is over: 'good' keeps it day and the villagers dance; 'wolf' keeps it night. */
+  private ending: 'good' | 'wolf' | null = null;
+  /** 0..1 how far the survivors have broken into their dance. */
+  private dance = 0;
   private actors: Actor[] = [];
   private billboards: THREE.Object3D[] = [];
   private focusRing: THREE.Mesh;
@@ -218,6 +228,9 @@ export class Stage {
     this.scene.add(this.town.root);
     this.billboards.push(...this.town.billboards);
 
+    this.spring = new Spring(this.town);
+    this.scene.add(this.spring.group);
+
     this.animals = new Animals(this.town.perches, this.town.fliesSpots);
     this.scene.add(this.animals.group);
     this.billboards.push(...this.animals.billboards);
@@ -237,7 +250,7 @@ export class Stage {
       const den = new THREE.Vector3(Math.cos(da) * 4.6, 0, Math.sin(da) * 4.6);
       this.scene.add(sprite, wolf, grave);
       this.billboards.push(sprite, wolf, grave);
-      this.actors.push({ id: i, sprite, wolf, grave, base, den, status: 'alive', gen: 0, phase: i * 0.7 });
+      this.actors.push({ id: i, sprite, wolf, grave, base, den, status: 'alive', gen: 0, phase: i * 0.7, pose: 1 });
     }
 
     this.animals.onSqueak = (p) => this.sounds?.squeak(this.falloff(p));
@@ -277,6 +290,8 @@ export class Stage {
   // ───────────────────────── public API ─────────────────────────
 
   setNight(night: boolean) {
+    // once the game is decided its ending owns the sky
+    if (this.ending) return;
     this.nightTarget = night ? 1 : 0;
   }
 
@@ -829,17 +844,181 @@ export class Stage {
     })();
   }
 
+  // ── endings ──
+
+  /** A wide, low shot of the plaza with the northern sky (sun / moon) over the church. */
+  private skyShot(secs: number) {
+    this.shot = { target: new THREE.Vector3(0, 4, -4), until: this.time + secs, dist: 44, band: 0.5 };
+    this.yawGoal = 0;
+    this.resetView(true);
+    this.pitchGoal = 0.16;
+  }
+
+  /**
+   * 狼人胜利: in broad daylight the surviving wolves turn, fall on everyone
+   * left on the plaza, and the moment the last one drops night slams down under
+   * a blood-red moon. Resolves on nightfall (`onNight` fires then too); the pack
+   * then gathers by the well and howls.
+   */
+  async wolfFinale(wolfIds: number[], onNight: () => void): Promise<void> {
+    const epoch = this.epoch;
+    const ok = () => epoch === this.epoch;
+    this.ending = 'wolf';
+    this.nightTarget = 0;
+    this.shot = { target: new THREE.Vector3(0, 1.2, 0), until: this.time + 600, dist: 36, band: 0.4 };
+    this.yawGoal = 0;
+    this.resetView(true);
+    this.pitchGoal = 0.62;
+    await this.wait(1.2);
+    if (!ok()) return;
+
+    // 兽化: one by one they drop the disguise
+    const pack = wolfIds.map((id) => this.actors[id]).filter((a) => a.status === 'alive');
+    for (const a of pack) {
+      a.gen++;
+      const at = (this.anchor(a) ?? a.base).clone().setY(0);
+      a.sprite.visible = false;
+      a.wolf.position.copy(at);
+      a.wolf.visible = true;
+      this.fx.puff(at);
+      this.fx.shake = Math.max(this.fx.shake, 0.25);
+      this.sounds?.growl(1);
+      await this.tween(0.35, (k) => {
+        a.wolf.scale.x = 0.55 + 0.45 * k;
+        a.pose = 0.55 + 0.45 * k + Math.sin(k * Math.PI) * 0.25;
+      });
+      if (!ok()) return;
+      await this.wait(0.35);
+      if (!ok()) return;
+    }
+    this.sounds?.howl(1, 1);
+    await this.wait(1.4);
+    if (!ok()) return;
+
+    // 屠杀: each wolf takes the nearest villager still standing, again and again
+    const prey = this.actors.filter((a) => a.status === 'alive' && !pack.includes(a) && a.sprite.visible);
+    const taken = new Set<Actor>();
+    const hunt = async (w: Actor, k: number) => {
+      await this.wait(k * 0.3);
+      while (ok()) {
+        const left = prey.filter((v) => !taken.has(v) && v.status === 'alive');
+        if (!left.length) return;
+        const v = left.reduce((best, x) => (x.sprite.position.distanceTo(w.wolf.position) < best.sprite.position.distanceTo(w.wolf.position) ? x : best));
+        taken.add(v);
+        v.gen++; // frozen with fear
+        const vp = v.sprite.position.clone().setY(0);
+        const from = w.wolf.position.clone().setY(0);
+        const stand = vp.clone().add(from.clone().sub(vp).setY(0).normalize().multiplyScalar(1.1));
+        await this.walk(w.wolf, stand, ok, 9);
+        if (!ok()) return;
+        await this.lunge(w.wolf, stand, vp, 0.7);
+        if (!ok()) return;
+        this.sounds?.scream(this.falloff(vp) * 0.8);
+        this.fx.blood(vp.clone().setY(1), vp.clone().sub(stand).setY(0).normalize(), 0.8);
+        this.fx.shake = Math.max(this.fx.shake, 0.15);
+        // cut down where they stood: a grave there, their house dark (the door stays shut)
+        v.status = 'dead';
+        v.sprite.visible = false;
+        v.grave.position.copy(vp);
+        v.grave.visible = true;
+        this.town.houses[v.id].lit = false;
+        await this.wait(0.35);
+      }
+    };
+    await Promise.all(pack.map(hunt));
+    await this.wait(0.8);
+    if (!ok()) return;
+
+    // 天黑: at once
+    this.nightTarget = 1;
+    this.fx.flash = Math.max(this.fx.flash, 0.6);
+    void this.tween(0.6, (k) => {
+      this.atmo.mix = Math.max(this.atmo.mix, k);
+      this.atmo.blood = k;
+    });
+    onNight();
+    this.skyShot(600);
+
+    // the pack gathers by the well and howls at the moon
+    void (async () => {
+      await Promise.all(pack.map((w) => this.walk(w.wolf, w.den, ok, 4)));
+      while (ok()) {
+        for (const w of pack) {
+          if (!ok()) return;
+          await this.tween(1.6, (k) => (w.pose = 1 + Math.sin(k * Math.PI) * 0.18));
+          await this.wait(0.8 + Math.random() * 1.5);
+        }
+      }
+    })();
+  }
+
+  /**
+   * 好人胜利: the fog lifts and the sun climbs over the church, the old tree by the
+   * well leafs out and blossoms, flowers open along the roads, and everyone still
+   * standing dances round in circles. Resolves once the scene has bloomed.
+   */
+  async goodFinale(): Promise<void> {
+    const epoch = this.epoch;
+    const ok = () => epoch === this.epoch;
+    this.ending = 'good';
+    this.nightTarget = 0;
+    for (const a of this.actors) {
+      // any wolf still showing goes back to plain clothes (none should be left standing)
+      if (a.wolf.visible) {
+        a.wolf.visible = false;
+        if (a.status === 'alive') a.sprite.visible = true;
+      }
+    }
+    this.skyShot(600);
+    await this.wait(0.8);
+    if (!ok()) return;
+    void this.tween(6, (k) => (this.atmo.clear = k * k * (3 - 2 * k)));
+    await this.wait(2);
+    if (!ok()) return;
+    void this.tween(5, (k) => (this.spring.grow = k));
+    await this.wait(1.5);
+    if (!ok()) return;
+    for (const a of this.actors) if (a.status === 'alive') a.gen++; // stop wherever they were headed
+    await this.tween(1.2, (k) => (this.dance = k));
+    await this.wait(2);
+  }
+
+  /** The survivors skip round in little circles, hopping. */
+  private danceStep(t: number) {
+    const d = this.dance;
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    for (const a of this.actors) {
+      if (a.status !== 'alive' || !a.sprite.visible) continue;
+      const th = t * 2.6 + a.phase * 2;
+      const r = 0.7 * d;
+      a.sprite.position.set(a.base.x + Math.cos(th) * r - r, Math.abs(Math.sin(t * 7 + a.phase)) * 0.3 * d, a.base.z + Math.sin(th) * r);
+      // face the way they're going round
+      const vel = new THREE.Vector3(-Math.sin(th), 0, Math.cos(th));
+      a.sprite.scale.x = vel.dot(right) >= 0 ? 1 : -1;
+      const hop = Math.sin(t * 7 + a.phase);
+      setFrame((a.sprite.material as THREE.MeshStandardMaterial).map!, hop > 0.3 ? 1 : hop < -0.3 ? 2 : 0);
+    }
+  }
+
   resetAll() {
     this.epoch++;
+    this.ending = null;
+    this.dance = 0;
+    this.atmo.clear = 0;
+    this.atmo.blood = 0;
+    this.spring.reset();
     for (const a of this.actors) {
       a.status = 'alive';
       a.gen++;
+      a.pose = 1;
       a.sprite.visible = true;
       a.sprite.position.copy(a.base);
       a.wolf.visible = false;
       a.grave.visible = false;
+      a.grave.position.copy(a.base);
       for (const body of [a.sprite, a.wolf]) {
         body.rotation.z = 0;
+        body.scale.set(1, 1, 1);
         setFrame((body.material as THREE.MeshStandardMaterial).map!, 0);
       }
     }
@@ -1123,7 +1302,9 @@ export class Stage {
     this.fx.update(dt, t);
     this.shield.update(dt, t);
     this.magic.update(dt, t);
+    this.spring.update(dt, t);
     this.stepTweens(dt);
+    if (this.dance > 0) this.danceStep(t);
     for (const w of this.town.windows) w.emissiveIntensity = THREE.MathUtils.lerp(0.15, 2.2, n);
     for (const h of this.town.houses) {
       const glow = h.lit ? THREE.MathUtils.lerp(0.15, 2.2, n) : 0;
@@ -1145,7 +1326,7 @@ export class Stage {
         sm.emissiveIntensity = THREE.MathUtils.lerp(0.12, 0.4, n) + (a.id === this.selfId ? 0.12 : 0) + (body === a.wolf ? 0.1 : 0);
         const speaking = this.focusId === a.id;
         const bob = Math.sin(t * (speaking ? 7 : 2) + a.phase);
-        body.scale.y = 1 + bob * (speaking ? 0.035 : body === a.wolf ? 0.03 : 0.015);
+        body.scale.y = (1 + bob * (speaking ? 0.035 : body === a.wolf ? 0.03 : 0.015)) * (body === a.wolf ? a.pose : 1);
       }
     }
 
@@ -1228,7 +1409,7 @@ export class Stage {
     this.grade.uniforms.time.value = t;
     this.grade.uniforms.night.value = n;
     this.grade.uniforms.flash.value = this.atmo.lightning * n + this.fx.flash * 0.8;
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.05, 1.25, n);
+    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.05, 1.25, n) + this.atmo.clear * 0.2;
 
     this.composer.render(dt);
 

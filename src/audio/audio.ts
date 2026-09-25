@@ -2,7 +2,12 @@
  * Procedural audio (Web Audio, no asset files): two BGM themes — 白天悬疑 /
  * 夜晚危险 — cross-faded with the day/night mix, ambience (wind, rain,
  * thunder) and one-shot SFX (doors, wolves, rats, bats, dawn stingers).
+ * When the game is decided an ending takes over the music: a lament under
+ * wolf howls, or a bright dance tune with birdsong.
  */
+
+/** 'hush': the music drops out (the wolves are about to strike). */
+export type Ending = 'hush' | 'wolf' | 'good';
 
 type Bus = GainNode;
 
@@ -33,6 +38,12 @@ export class AudioEngine {
   private muted = false;
   /** User volume per group (配置), 0..1, on top of the mix levels below. */
   private levels = { music: 1, sfx: 1, ambience: 1 };
+  private ending: Ending | null = null;
+  /** The ending's music; replaced (the old one fades) whenever the ending changes. */
+  private endBus: GainNode | null = null;
+  private endNext = 0;
+  private endStep = 0;
+  private nextCall = 0;
 
   get started() {
     return this.ctx !== null;
@@ -79,7 +90,10 @@ export class AudioEngine {
     const now = ctx.currentTime + 0.1;
     this.nextBeat = { day: now, night: now };
     this.schedTimer = window.setInterval(() => this.schedule(), 100);
+    const ending = this.ending;
+    this.ending = null;
     this.setNight(this.night === 1);
+    this.setEnding(ending);
   }
 
   /** Freeze all sound (the game is paused); scheduled music waits with the clock. */
@@ -108,12 +122,47 @@ export class AudioEngine {
   /** 0 = day, 1 = night. Cross-fades music themes and ambience. */
   setNight(night: boolean) {
     this.night = night ? 1 : 0;
-    if (!this.ctx) return;
+    if (!this.ctx || this.ending) return;
     const t = this.ctx.currentTime;
     this.dayBus.gain.setTargetAtTime(night ? 0 : 1, t, 1.5);
     this.nightBus.gain.setTargetAtTime(night ? 1 : 0, t, 1.5);
     this.rainGain.gain.setTargetAtTime(night ? 1 : 0, t, 2.5);
     this.windGain.gain.setTargetAtTime(night ? 0.2 : 0.12, t, 2);
+  }
+
+  /**
+   * The game is over: silence the day/night themes and play the ending's own
+   * music and ambience; `null` goes back to the usual themes (title screen).
+   */
+  setEnding(kind: Ending | null) {
+    if (kind === this.ending) return;
+    this.ending = kind;
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    if (this.endBus) {
+      const old = this.endBus;
+      old.gain.setTargetAtTime(0, t, 0.6);
+      setTimeout(() => old.disconnect(), 4000);
+      this.endBus = null;
+    }
+    if (!kind) {
+      this.setNight(this.night === 1);
+      return;
+    }
+    this.dayBus.gain.setTargetAtTime(0, t, kind === 'hush' ? 0.4 : 0.8);
+    this.nightBus.gain.setTargetAtTime(0, t, 0.4);
+    // wolves: only their howls are left on the wind; the village: a light breeze
+    this.rainGain.gain.setTargetAtTime(0, t, 0.8);
+    this.windGain.gain.setTargetAtTime(kind === 'good' ? 0.04 : kind === 'wolf' ? 0 : 0.12, t, 1);
+    if (kind === 'hush') return;
+    this.endBus = ctx.createGain();
+    this.endBus.gain.setValueAtTime(0.0001, t);
+    this.endBus.gain.exponentialRampToValueAtTime(1, t + 1.5);
+    this.endBus.connect(this.music);
+    this.endNext = t + (kind === 'wolf' ? 1.2 : 0.8);
+    this.endStep = 0;
+    this.nextCall = t + (kind === 'wolf' ? 0.3 : 1.5);
   }
 
   dispose() {
@@ -339,6 +388,13 @@ export class AudioEngine {
     if (!ctx) return;
     const horizon = ctx.currentTime + 0.6;
     this.rainDrops(horizon);
+    if (this.ending) {
+      this.endingMusic(horizon);
+      // the themes' clocks keep time, so they pick up cleanly afterwards
+      this.nextBeat.day = Math.max(this.nextBeat.day, horizon);
+      this.nextBeat.night = Math.max(this.nextBeat.night, horizon);
+      return;
+    }
     // day theme: 66 bpm, sparse music box over pizzicato pulse
     const dayBeat = 60 / 66;
     while (this.nextBeat.day < horizon) {
@@ -410,6 +466,188 @@ export class AudioEngine {
       this.out(g, bus, 0.6);
       o.start(t);
       o.stop(t + 5);
+    }
+  }
+
+  // ───────────────────────── endings ─────────────────────────
+
+  private endingMusic(horizon: number) {
+    const ctx = this.ctx!;
+    if (this.ending === 'wolf') {
+      // 悲歌: a lament in D minor, one step per beat at 58 bpm
+      while (this.endNext < horizon) {
+        this.lament(this.endNext, this.endStep++);
+        this.endNext += 60 / 58;
+      }
+      // howls from every side, now near, now far
+      while (this.nextCall < horizon) {
+        const far = Math.random();
+        this.howl(1 - far * 0.6, this.nextCall - ctx.currentTime, 0.88 + Math.random() * 0.3);
+        if (Math.random() < 0.35) this.howl(0.5 - far * 0.2, this.nextCall - ctx.currentTime + 0.8 + Math.random(), 1.1 + Math.random() * 0.15);
+        this.nextCall += 4 + Math.random() * 5;
+      }
+    } else if (this.ending === 'good') {
+      // a bright C-major dance at 132 bpm, one step per eighth note
+      while (this.endNext < horizon) {
+        this.jig(this.endNext, this.endStep++);
+        this.endNext += 60 / 132 / 2;
+      }
+      while (this.nextCall < horizon) {
+        this.bird(this.nextCall);
+        this.nextCall += 0.8 + Math.random() * 2.5;
+      }
+    }
+  }
+
+  /** One beat of the lament: string pad per bar, bass, and a violin line (32-beat loop). */
+  private lament(t: number, i: number) {
+    const bus = this.endBus!;
+    const beat = 60 / 58;
+    const step = i % 32;
+    // Dm | B♭ | Gm | A | Dm | Gm | A | Dm
+    const chords = [
+      [50, 57, 62, 65],
+      [46, 53, 58, 62],
+      [43, 55, 58, 62],
+      [45, 52, 57, 61],
+      [50, 57, 62, 65],
+      [43, 55, 58, 62],
+      [45, 52, 57, 61],
+      [38, 50, 57, 62],
+    ];
+    if (step % 4 === 0) {
+      const [root, ...upper] = chords[step / 4];
+      const bar = beat * 4;
+      this.tone(bus, t, midi(root - 12), 'sine', 0.13, 0.6, bar + 1, 0.3);
+      for (const n of upper) this.strings(bus, t, n, bar, 0.022);
+    }
+    // violin melody: [beat in loop, midi, beats]
+    const line: [number, number, number][] = [
+      [0, 69, 2], [2, 65, 1], [3, 64, 1],
+      [4, 62, 3], [7, 65, 1],
+      [8, 67, 2], [10, 70, 1], [11, 69, 1],
+      [12, 64, 2], [14, 61, 1], [15, 64, 1],
+      [16, 65, 2], [18, 69, 2],
+      [20, 70, 2], [22, 67, 1], [23, 70, 1],
+      [24, 69, 2], [26, 73, 1], [27, 76, 1],
+      [28, 74, 4],
+    ];
+    // every other time round the tune drops an octave, like a cello answering
+    const low = Math.floor(i / 32) % 2 === 1 ? -12 : 0;
+    for (const [at, n, len] of line) if (at === step) this.violin(bus, t, n + low, len * beat, low ? 0.06 : 0.045);
+  }
+
+  /** A bowed string: detuned saws through a soft low-pass, slow swell. */
+  private strings(bus: AudioNode, t: number, n: number, dur: number, vol: number) {
+    const ctx = this.ctx!;
+    const f = this.filter('lowpass', 1100, 0.7);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 1.1);
+    g.gain.setValueAtTime(vol, t + dur - 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 1.2);
+    f.connect(g);
+    this.out(g, bus, 0.7);
+    for (const det of [-7, 6]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = midi(n);
+      o.detune.value = det;
+      o.connect(f);
+      o.start(t);
+      o.stop(t + dur + 1.3);
+    }
+  }
+
+  /** A solo violin note with delayed vibrato. */
+  private violin(bus: AudioNode, t: number, n: number, dur: number, vol: number) {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.value = midi(n);
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 5.4;
+    const depth = ctx.createGain();
+    depth.gain.setValueAtTime(0, t);
+    depth.gain.linearRampToValueAtTime(14, t + Math.min(0.8, dur * 0.6));
+    lfo.connect(depth).connect(o.detune);
+    const body = this.filter('lowpass', 2400, 0.8);
+    const formant = this.filter('peaking', 1300, 1.5);
+    formant.gain.value = 6;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.25);
+    g.gain.setValueAtTime(vol, t + Math.max(0.3, dur - 0.15));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.6);
+    o.connect(body).connect(formant).connect(g);
+    this.out(g, bus, 0.8);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + dur + 0.7);
+    lfo.stop(t + dur + 0.7);
+  }
+
+  /** One eighth of the dance tune: oom-pah bass, chord stabs, shaker and a whistle-bright melody (64-step loop). */
+  private jig(t: number, i: number) {
+    const bus = this.endBus!;
+    const step = i % 64;
+    const bar = Math.floor(step / 8);
+    const pos = step % 8;
+    // C | F | G | C | C | Am | F G | C
+    const roots = [48, 53, 55, 48, 48, 45, pos < 4 ? 53 : 55, 48];
+    const triads: Record<number, number[]> = { 48: [64, 67, 72], 53: [65, 69, 72], 55: [62, 67, 71], 45: [64, 69, 72] };
+    const root = roots[bar];
+    if (pos === 0 || pos === 4) {
+      this.tone(bus, t, midi(root - 12 + (pos === 4 ? 7 : 0)), 'triangle', 0.16, 0.005, 0.28, 0.1);
+      // a soft kick under the bass
+      const k = this.ctx!.createOscillator();
+      k.frequency.setValueAtTime(120, t);
+      k.frequency.exponentialRampToValueAtTime(45, t + 0.1);
+      const kg = this.env(t, 0.003, 0.25, 0.14);
+      k.connect(kg);
+      this.out(kg, bus, 0);
+      k.start(t);
+      k.stop(t + 0.2);
+    }
+    if (pos === 2 || pos === 6) for (const n of triads[root]) this.tone(bus, t, midi(n - 12), 'square', 0.012, 0.004, 0.14, 0.15);
+    if (pos % 2 === 1) this.burst(bus, t, 'highpass', 7000, 0.7, 0.035, 0.002, 0.04);
+    if (pos === 4) this.burst(bus, t, 'bandpass', 1600, 1.2, 0.07, 0.002, 0.09, 0.3);
+    const tune = [
+      72, 0, 76, 0, 79, 0, 76, 0,
+      77, 0, 76, 0, 74, 0, 72, 0,
+      74, 0, 71, 0, 74, 76, 77, 0,
+      76, 0, 72, 0, 72, 0, 0, 0,
+      79, 0, 79, 81, 79, 0, 76, 0,
+      76, 0, 72, 0, 69, 0, 72, 0,
+      77, 0, 76, 0, 74, 0, 71, 0,
+      72, 0, 67, 0, 72, 0, 84, 0,
+    ];
+    const n = tune[step];
+    if (n) {
+      this.tone(bus, t, midi(n), 'triangle', 0.07, 0.006, 0.34, 0.35);
+      this.tone(bus, t, midi(n + 12), 'sine', 0.018, 0.006, 0.2, 0.35);
+    }
+  }
+
+  /** A songbird: a few quick rising and falling chirps. */
+  private bird(t: number) {
+    const ctx = this.ctx!;
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = Math.random() * 1.6 - 0.8;
+    pan.connect(this.amb);
+    const base = 2600 + Math.random() * 1600;
+    const notes = 2 + Math.floor(Math.random() * 4);
+    for (let k = 0; k < notes; k++) {
+      const at = t + k * (0.09 + Math.random() * 0.05);
+      const o = ctx.createOscillator();
+      const up = Math.random() < 0.6;
+      o.frequency.setValueAtTime(base * (up ? 0.8 : 1.25), at);
+      o.frequency.exponentialRampToValueAtTime(base * (up ? 1.3 : 0.85), at + 0.07);
+      const g = this.env(at, 0.004, 0.05, 0.07);
+      o.connect(g);
+      this.out(g, pan, 0.3);
+      o.start(at);
+      o.stop(at + 0.12);
     }
   }
 
