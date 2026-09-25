@@ -63,6 +63,9 @@ npm run build      # 静态产物输出到 dist/
 首次使用需在仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。
 构建使用相对路径（`base: './'`），fork 后仓库改名也能直接部署。
 
+网页版只能用 OpenAI / DeepSeek，「本地 LLM」选项是灰的：页面来自公网域名（如 `*.github.io`），浏览器请求 `http://127.0.0.1` 时要过跨域（CORS）和私有网络访问检查，而本地推理服务（如 MTPLX）默认拒绝非同源请求，调用必然失败。
+只有页面本身从 `localhost` / `127.0.0.1` 打开时才开放这一项，所以要用本地模型请 clone 仓库后 `npm run dev`。
+
 ## 结构
 
 ```

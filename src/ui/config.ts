@@ -158,7 +158,10 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         h(
           'div',
           { class: 'form', style: 'margin-top:8px' },
-          h('label', {}, '服务商'), tabs,
+          h('label', {}, '服务商'),
+          providerAvailable('local')
+            ? tabs
+            : h('div', { class: 'stack' }, tabs, hintText('「本地 LLM」只能在本机运行游戏时使用：网页版来自公网域名，浏览器会以跨域（CORS / 私有网络访问）为由拦截对 127.0.0.1 的请求。clone 仓库后 npm run dev 即可用本地模型。')),
           h('label', {}, '地址'), address,
           h('label', {}, '模型'), model,
           h('label', {}, '发言推理'), h('div', { class: 'inline' }, effortSel('reasoning', '发言推理'), spec?.defaultEffort ? hintText(`官方默认 ${spec.defaultEffort}`) : null),
@@ -167,7 +170,7 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
           h('label', {}, '跨域代理'),
           PROXY_AVAILABLE
             ? h('label', { class: 'check' }, proxy, '经开发服务器转发（避免浏览器跨域限制）')
-            : hintText('静态网页版直连服务商；本地服务需允许跨域（CORS），或 clone 后用 npm run dev'),
+            : hintText('静态网页版直连服务商'),
         ),
         h(
           'div',
