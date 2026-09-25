@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROVIDERS, buildChatBody, clampEffort, effortsFor } from './catalog';
+import { PROVIDERS, buildChatBody, clampEffort, effortsFor, thinkingBudget } from './catalog';
 import { keyMayGoTo } from './provider';
 
 const base = { messages: [], maxTokens: 1000, temperature: 0.9 };
@@ -31,8 +31,9 @@ describe('provider matrix', () => {
     expect(off).not.toHaveProperty('reasoning_effort');
   });
 
-  it('local: unchanged Qwen-style format', () => {
-    expect(buildChatBody({ ...base, dialect: 'local', model: 'm', effort: 'medium' })).toMatchObject({ reasoning_effort: 'medium', max_tokens: 1000 });
+  it('local: Qwen-style format, thinking budget on top of the answer cap', () => {
+    expect(buildChatBody({ ...base, dialect: 'local', model: 'm', effort: 'medium' })).toMatchObject({ reasoning_effort: 'medium', max_tokens: 1000 + thinkingBudget('medium') });
+    expect(buildChatBody({ ...base, dialect: 'local', model: 'm', effort: 'none' })).toMatchObject({ max_tokens: 1000 });
     expect(buildChatBody({ ...base, dialect: 'local', model: 'm', effort: 'none' })).toMatchObject({ chat_template_kwargs: { enable_thinking: false } });
   });
 

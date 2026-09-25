@@ -14,6 +14,9 @@ export interface AgentTelemetry {
   onFailure?(info: { player: number; kind: string; error: string }): Promise<'retry' | 'fallback'>;
 }
 
+/** Speeches quote other seats: below the provider default (0.9) to keep the numbers straight. */
+const SPEECH_TEMPERATURE = 0.7;
+
 export interface LLMSnapshot {
   notes: string[];
   fallback: MockSnapshot;
@@ -54,8 +57,8 @@ export class LLMAgent implements Agent {
       {
         role: 'user',
         content: [
+          `【你的私人记录本（只有你知道，不是公开信息）】\n${privateNotebook(view, this.notes)}`,
           `【共享发言记录本 · 之前几天】\n${sharedNotebook(view, { before: view.day })}`,
-          `【你的私人记录本】\n${privateNotebook(view, this.notes)}`,
           `【今天的发言（第 ${view.day} 天，按顺序）】\n${sharedNotebook(view, { onlyDay: view.day })}`,
           `【当前任务】\n${task}`,
         ].join('\n\n'),
@@ -63,14 +66,14 @@ export class LLMAgent implements Agent {
     ];
   }
 
-  private async call(kind: string, msgs: ChatMessage[], maxTokens: number, reasoning?: string): Promise<string> {
+  private async call(kind: string, msgs: ChatMessage[], maxTokens: number, reasoning?: string, temperature?: number): Promise<string> {
     let lastErr = '';
     // back off on overload (e.g. local server 507 OOM under memory pressure)
     const delays = [0, 5000, 15000];
     for (let attempt = 0; attempt < delays.length; attempt++) {
       if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
       try {
-        const r = await this.queue.run(() => this.provider.chat(msgs, { maxTokens, reasoning }));
+        const r = await this.queue.run(() => this.provider.chat(msgs, { maxTokens, reasoning, temperature }));
         this.telemetry.onCall?.({ player: this.id, kind, ms: r.ms, ok: true });
         if (r.content) return r.content;
         lastErr = '空回复';
@@ -95,7 +98,7 @@ export class LLMAgent implements Agent {
       try {
         // wolf chat is frequent and short: use the (cheaper) decision reasoning level
         const reasoning = req.kind === 'wolfChat' ? this.provider.config.decisionReasoning : undefined;
-        const raw = await this.call(kind, this.messages(view, speechTask(req, view)), req.kind === 'wolfChat' ? 800 : 2000, reasoning);
+        const raw = await this.call(kind, this.messages(view, speechTask(req, view)), req.kind === 'wolfChat' ? 800 : 2000, reasoning, SPEECH_TEMPERATURE);
         if (req.kind === 'speech' && req.canExplode) {
           const { text, explode } = parseExplode(cleanSpeech(raw, view, this.persona.name));
           if (explode) return { text: text || '过', explode };

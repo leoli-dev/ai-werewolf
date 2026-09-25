@@ -55,17 +55,19 @@ ${RULES_TEXT}
 
 【表达要求】
 - 用简体中文口语，性格只影响语气，内容必须是基于场上信息的推理。
-- 提到玩家时用「N号」。
+- 提到玩家时用「N号」。玩家名字里的行当（铁匠、药师、猎户、骑士、裁缝……）只是小镇里的称呼，和狼人杀身份毫无关系：药师不是女巫，猎户不是猎人。谁是什么身份，只能看 GM 公布的信息和他们自己的声明。
 - 只输出你说出口的台词：不要写动作、神态、旁白（禁止 *…*、（…）这类描写），不要输出思考过程或标签。`;
 }
 
 function fmtEvent(e: GameEvent, view: PlayerView): string | null {
-  const name = (id: number) => `${seat(id)}${view.players[id]?.name ?? ''}`;
   const d = `第${e.day}天`;
   switch (e.type) {
     case 'speech': {
+      // speaker on its own header line and the words fenced in 「」: with a one-line
+      // "7号卡尔：…6号你承认刀了4号" small models credit the seats inside the text as the speaker
       const tag = { discussion: '发言', summary: '归纳总结', lastWords: '遗言', defense: '平票正名' }[e.speechKind ?? 'discussion'];
-      return `[${d} ${tag}] ${name(e.speaker!)}：${e.text}`;
+      const name = view.players[e.speaker!]?.name;
+      return `[${d} ${tag}] 发言人：${seat(e.speaker!)}${name ? `（${name}）` : ''}\n「${e.text}」`;
     }
     case 'gm':
     case 'vote':
@@ -129,7 +131,7 @@ export function privateNotebook(view: PlayerView, notes: string[]): string {
 function aliveList(view: PlayerView) {
   const alive = view.players.filter((p) => p.alive).map((p) => seat(p.id));
   const dead = view.players.filter((p) => !p.alive).map((p) => seat(p.id));
-  return `存活：${alive.join('、')}${dead.length ? `；已出局：${dead.join('、')}` : ''}`;
+  return `存活：${alive.join('、')}${dead.length ? `；已出局：${dead.join('、')}（已出局的人不再参与投票，不能再当作怀疑或放逐对象）` : ''}`;
 }
 
 export function speechTask(req: SpeechRequest | WolfChatRequest, view: PlayerView): string {
@@ -159,15 +161,20 @@ ${task}`;
   }[req.purpose];
   const prior = todaysSpeakers(view);
   const respond = prior.length
-    ? `今天在你之前已有 ${prior.map(seat).join('、')} 发言（见上方【今天的发言】）。你必须具体回应其中至少两人：点名并引用或概括他们说过的内容，说明你同意/反对的理由；同时结合昨夜的死亡情况、身份声明（例如谁跳了预言家、报了什么查验）和之前的投票。不要说泛泛的「XX发言奇怪」而不给出依据。`
+    ? `今天在你之前已有 ${prior.map(seat).join('、')} 发言（见上方【今天的发言】）。你必须具体回应其中至少两人：点名并引用或概括他们说过的内容，说明你同意/反对的理由；同时结合昨夜的死亡情况、身份声明（例如谁跳了预言家、报了什么查验）和之前的投票。不要说泛泛的「XX发言奇怪」而不给出依据。
+【引用自检】说「N号说了/承认了/跳了……」之前，先确认这句话确实在「发言人：N号」那一段的「」里。发言内容里提到的号码是被谈论或被质问的人，不是说话人：例如 7号说「6号你承认刀了4号？」，承认的是 6号，不是 7号。记不清是谁说的就不要点名引用。`
     : '你是今天第一个发言的人，其他人都还没轮到，不能拿「没发言」怀疑任何人。结合昨夜结果和之前几天的记录（如果有）开个头，给出你的初步判断，不要编造别人说过的话。';
+  const secret =
+    view.self.role === 'werewolf'
+      ? '\n【保密】狼队频道的内容（刀了谁、狼队讨论过什么、谁是你的队友）只有狼人知道，白天绝不能说出口，也不能说漏嘴。昨夜的公开结果只有 GM 宣布的死亡名单。'
+      : '\n【保密】私人记录本里的信息别人不知道；除非你有意公开身份（如报查验、报用药），不要把它当成大家都知道的事来说。';
   const progress = speechProgress(req, view);
   const explode = req.canExplode
     ? `\n【自爆选项】你是狼人，可以选择自爆：在发言最开头写「${EXPLODE_TAG}」，后面接你的最后一句话。自爆后你立刻出局，今天剩下的发言和投票全部取消，直接天黑。代价很大（白送一狼），只在局势对狼队明显不利时用：例如你被可信的预言家查杀、今天必然被放逐，自爆能打断好人归票、保住队友或让真预言家来不及报查验。局势正常就不要自爆。`
     : '';
   return `现在是第 ${req.day} 天（第 ${req.day} 轮白天）。${aliveList(view)}
 ${progress ? `${progress}\n` : ''}${what}
-${respond}${explode}
+${respond}${req.purpose === 'lastWords' ? '' : secret}${explode}
 200 字以内，直接输出发言内容。`;
 }
 

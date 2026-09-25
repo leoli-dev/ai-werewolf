@@ -76,6 +76,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .roster-row .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .roster-row .tag { font-size: 11px; color: var(--ink-dim); }
 .roster-row .tag.wolf { color: var(--wolf); }
+.roster-row .tag.god { color: var(--good); }
 .roster-row .tag.me { color: var(--gold); }
 .roster-row .status { font-size: 11px; }
 
@@ -144,11 +145,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .label .plate .n.ring-wolf { border-color: var(--wolf); box-shadow: 0 0 8px var(--wolf); }
 .label .role-tag { font-size: 10px; padding: 0 4px; background: rgba(12, 10, 9, 0.8); }
 .label .role-tag.wolf { color: var(--wolf); }
-.label .role-tag.good { color: var(--good); }
+.label .role-tag.good, .label .role-tag.god { color: var(--good); }
 .label.dead .plate { opacity: 0.55; }
 .label.me .plate { border-color: var(--gold); color: #fff1d0; }
 .label .bubble { width: max-content; max-width: 280px; max-height: 42vh; overflow-y: auto; font-size: 12px; line-height: 1.5; padding: 6px 9px; background: #efe4c8; color: #221a14; border: 2px solid #2a1f16; box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45); margin-bottom: 4px; overflow-wrap: anywhere; white-space: pre-wrap; pointer-events: auto; position: relative; }
 .label .bubble::after { content: ''; position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%); border: 5px solid transparent; border-top-color: inherit; border-bottom: 0; }
+/* after the vote: a defense or the exile's last words, alone on the plaza */
+.label .bubble.spot { max-width: 340px; font-size: 14px; padding: 8px 11px; box-shadow: 0 0 0 2px var(--gold), 0 0 18px rgba(217, 164, 65, 0.6), 3px 3px 0 rgba(0, 0, 0, 0.5); animation: spot-in 0.35s ease-out; }
+@keyframes spot-in { from { transform: scale(0.85); opacity: 0; } to { transform: none; opacity: 1; } }
 .label:hover { z-index: 999 !important; }
 .label .thinking { font-size: 12px; color: var(--gold); font-family: var(--pixel); }
 
@@ -360,6 +364,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .label .plate { font-size: 10px; padding: 0 4px; }
   .label .plate .n { width: 15px; height: 15px; font-size: 9px; }
   .label .bubble { max-width: min(190px, 52vw); max-height: 26dvh; font-size: 11px; padding: 4px 7px; }
+  .label .bubble.spot { max-width: min(240px, 64vw); font-size: 12px; padding: 6px 9px; }
   #nightstep { font-size: 28px; letter-spacing: 0.3em; padding-left: 0.3em; top: 30%; }
   .toast { top: calc(var(--top-h, 70px) + 8px); width: max-content; max-width: calc(100vw - 24px); }
 
