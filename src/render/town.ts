@@ -81,12 +81,14 @@ export interface TownRefs {
   /** Positions where perched crows / flies can live. */
   perches: THREE.Vector3[];
   fliesSpots: THREE.Vector3[];
+  /** The old dead tree by the well (it blossoms when the village wins). */
+  plazaTree: { group: THREE.Group; height: number; bark: THREE.MeshStandardMaterial };
 }
 
 export function buildTown(): TownRefs {
   const rng = new Rng(42);
   const root = new THREE.Group();
-  const refs: TownRefs = { root, houses: [], windows: [], lanterns: [], lanternFlames: [], billboards: [], perches: [], fliesSpots: [] };
+  const refs: Omit<TownRefs, 'plazaTree'> = { root, houses: [], windows: [], lanterns: [], lanternFlames: [], billboards: [], perches: [], fliesSpots: [] };
 
   // ground
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), mat('grass', [60, 60]));
@@ -144,6 +146,7 @@ export function buildTown(): TownRefs {
   const tree = deadTree(rng, 5.5);
   tree.position.set(4.6, 0, -3.6);
   root.add(tree);
+  const plazaTree = { group: tree, height: 5.5, bark: (tree.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial };
   refs.perches.push(new THREE.Vector3(4.6 + 1.2, 4.3, -3.6));
 
   for (let k = 0; k < 6; k++) {
@@ -211,10 +214,10 @@ export function buildTown(): TownRefs {
     root.add(h);
   }
 
-  return refs;
+  return { ...refs, plazaTree };
 }
 
-function house(i: number, rng: Rng, refs: TownRefs): THREE.Group {
+function house(i: number, rng: Rng, refs: Omit<TownRefs, 'plazaTree'>): THREE.Group {
   const g = new THREE.Group();
   const w = 4.2 + rng.next() * 1.2;
   const d = 3.6 + rng.next() * 0.8;
@@ -480,7 +483,7 @@ function crate(rng: Rng): THREE.Mesh {
   return shadowy(c);
 }
 
-function lantern(refs: TownRefs): THREE.Group {
+function lantern(refs: Omit<TownRefs, 'plazaTree'>): THREE.Group {
   const g = new THREE.Group();
   const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.6, 0.14), new THREE.MeshStandardMaterial({ color: 0x1e1814 }));
   post.position.y = 1.3;
@@ -503,7 +506,7 @@ function lantern(refs: TownRefs): THREE.Group {
   return g;
 }
 
-function churchMesh(refs: TownRefs): THREE.Group {
+function churchMesh(refs: Omit<TownRefs, 'plazaTree'>): THREE.Group {
   const g = new THREE.Group();
   const stone = mat('stone', [3, 2], 11);
   const nave = new THREE.Mesh(new THREE.BoxGeometry(8, 6, 13), stone);

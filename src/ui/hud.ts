@@ -398,7 +398,9 @@ export class GameUI {
     });
   }
 
+  private destroyed = false;
   destroy() {
+    this.destroyed = true;
     this.unsubConfig();
     for (const off of this.cleanups) off();
     delete this.root.dataset.sheet;
@@ -967,10 +969,20 @@ export class GameUI {
     if (this.endShown) return;
     this.endShown = true;
     this.close();
-    this.stage.setNight(false);
     const meTeam = teamOf(this.game.players[this.me].role);
     const won = s.winner === meTeam;
-    setTimeout(() => {
+    // the ending plays out on the stage first, then the results come up
+    let finale: Promise<void>;
+    if (s.winner === 'wolf') {
+      audio.setEnding('hush');
+      const wolves = this.game.wolves().filter((w) => w.alive).map((w) => w.id);
+      finale = this.stage.wolfFinale(wolves, () => audio.setEnding('wolf'));
+    } else {
+      audio.setEnding('good');
+      finale = this.stage.goodFinale();
+    }
+    void finale.then(() => setTimeout(() => {
+      if (this.destroyed) return; // back at the title already
       const back = h(
         'div',
         { class: 'modal-back' },
@@ -986,7 +998,7 @@ export class GameUI {
       this.root.appendChild(back);
       this.renderRoster();
       this.renderChat();
-    }, 1500);
+    }, s.winner === 'wolf' ? 5000 : 3000)); // hold on the moon and the howling / the dance a little
   }
 }
 
