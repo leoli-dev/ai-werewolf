@@ -190,10 +190,41 @@ export interface Look {
   pants: string;
 }
 
-/** 16×24 villager sprite built from a Look, with a 1px dark outline. */
-export function characterCanvas(l: Look): HTMLCanvasElement {
+/** Frames in a walk sheet: standing, left foot up, right foot up. */
+export const WALK_FRAMES = 3;
+
+/** A texture showing one frame of a horizontal sheet; `setFrame` flips between them. */
+export function sheetTexture(c: HTMLCanvasElement, frames = WALK_FRAMES): THREE.CanvasTexture {
+  const t = pixelTexture(c);
+  t.repeat.set(1 / frames, 1);
+  return t;
+}
+
+export function setFrame(t: THREE.Texture, frame: number, frames = WALK_FRAMES) {
+  t.offset.x = frame / frames;
+}
+
+function sheet(frames: HTMLCanvasElement[]): HTMLCanvasElement {
+  const [c, ctx] = canvas(frames[0].width * frames.length, frames[0].height);
+  frames.forEach((f, k) => ctx.drawImage(f, k * f.width, 0));
+  return c;
+}
+
+/** The standing frame and two stepping frames of a villager, side by side. */
+export function characterSheet(l: Look): HTMLCanvasElement {
+  return sheet([0, 1, 2].map((f) => characterCanvas(l, f)));
+}
+
+/**
+ * 16×24 villager sprite built from a Look, with a 1px dark outline.
+ * `frame` 1 / 2: mid-stride, that side's foot lifted and the opposite arm swung forward.
+ */
+export function characterCanvas(l: Look, frame = 0): HTMLCanvasElement {
   const W = 16, H = 24;
   const [c, ctx] = canvas(W, H);
+  // lift of the left / right foot (2px), arm swing (hand 1px up = swung forward)
+  const liftL = frame === 1 ? 2 : 0;
+  const liftR = frame === 2 ? 2 : 0;
   const r = (x: number, y: number, w: number, h: number, col: string) => {
     ctx.fillStyle = col;
     ctx.fillRect(x, y, w, h);
@@ -202,18 +233,19 @@ export function characterCanvas(l: Look): HTMLCanvasElement {
 
   // legs & boots (hidden under long garments)
   if (!long) {
-    r(5, 18, 2, 4, l.pants);
-    r(9, 18, 2, 4, l.pants);
+    r(5, 18, 2, 4 - liftL, l.pants);
+    r(9, 18, 2, 4 - liftR, l.pants);
   }
-  r(4, 22, 3, 2, '#1e1712');
-  r(9, 22, 3, 2, '#1e1712');
+  r(4, 22 - liftL, 3, 2, '#1e1712');
+  r(9, 22 - liftR, 3, 2, '#1e1712');
 
   // body
   if (long) {
     r(4, 10, 8, 12, l.main);
     r(10, 10, 2, 12, l.dark);
-    r(3, 18, 1, 4, l.main); // flared hem
-    r(12, 18, 1, 4, l.dark);
+    // flared hem, swinging with the stride
+    r(3 - (liftR >> 1), 18, 1, 4, l.main);
+    r(12 + (liftL >> 1), 18, 1, 4, l.dark);
   } else if (l.body === 'cloak') {
     r(3, 10, 10, 10, l.main);
     r(10, 10, 3, 10, l.dark);
@@ -244,10 +276,13 @@ export function characterCanvas(l: Look): HTMLCanvasElement {
 
   // arms
   const sleeve = l.body === 'armor' ? '#5e626a' : l.dark;
-  r(3, 11, 1, 6, sleeve);
-  r(12, 11, 1, 6, sleeve);
-  r(3, 17, 1, 1, l.skin);
-  r(12, 17, 1, 1, l.skin);
+  // the arm opposite the lifted foot swings forward (its hand rides 1px higher)
+  const swingL = liftR >> 1;
+  const swingR = liftL >> 1;
+  r(3, 11, 1, 6 - swingL, sleeve);
+  r(12, 11, 1, 6 - swingR, sleeve);
+  r(3, 17 - swingL, 1, 1, l.skin);
+  r(12, 17 - swingR, 1, 1, l.skin);
 
   // head
   r(5, 3, 6, 7, l.skin);
@@ -463,12 +498,51 @@ export function cloudTexture(seed = 3): THREE.CanvasTexture {
   return t;
 }
 
+/** The werewolf's legs (rows 21–28): standing, full stride, legs passing under the body. */
+const WOLF_LEGS = [
+  [
+    '....DFFFD.DFFD..........',
+    '....DFFD...DFFD.........',
+    '...DFFD.....DFFD........',
+    '...DFD.......DFD........',
+    '...DFFD.......DFD.......',
+    '....DFFD.......DFFD.....',
+    '.....DDD........DDD.....',
+    '....CCCC........CCCC....',
+  ],
+  [
+    '....DFFFD..DFFD.........',
+    '...DFFD.....DFFD........',
+    '..DFFD.......DFFD.......',
+    '..DFD.........DFFD......',
+    '.DFFD..........DFFD.....',
+    '.DFD.............DFFD...',
+    '.DDD..............DDD...',
+    'CCCC..............CCCC..',
+  ],
+  [
+    '....DFFFDDFFD...........',
+    '.....DFFDDFFD...........',
+    '.....DFFDDFFD...........',
+    '......DFDDFD............',
+    '......DFFDFFD...........',
+    '.......DFFDFFD..........',
+    '.......DDD.DDD..........',
+    '......CCCCCCCC..........',
+  ],
+];
+
+/** Standing and two running frames of a werewolf, side by side. */
+export function werewolfSheet(seed: number): HTMLCanvasElement {
+  return sheet([0, 1, 2].map((f) => werewolfCanvas(seed, f)));
+}
+
 /**
  * 24×30 werewolf in three-quarter profile facing right: long snout, tall
  * pointed ears, shaggy mane, hunched back, bushy tail, digitigrade legs.
  * Drawn from a character map so the silhouette stays clean.
  */
-export function werewolfCanvas(seed: number): HTMLCanvasElement {
+export function werewolfCanvas(seed: number, frame = 0): HTMLCanvasElement {
   const furs: [string, string, string][] = [
     ['#7a6a5a', '#4e4238', '#a08e78'],
     ['#6e6258', '#443a34', '#948676'],
@@ -499,14 +573,7 @@ export function werewolfCanvas(seed: number): HTMLCanvasElement {
     '..DFFFLLLLFFFFD..DFFD...',
     '...DFFFFFFFFFD....DFD...',
     '....DFFFFFFFFD.....CCC..',
-    '....DFFFD.DFFD..........',
-    '....DFFD...DFFD.........',
-    '...DFFD.....DFFD........',
-    '...DFD.......DFD........',
-    '...DFFD.......DFD.......',
-    '....DFFD.......DFFD.....',
-    '.....DDD........DDD.....',
-    '....CCCC........CCCC....',
+    ...WOLF_LEGS[frame],
     '........................',
   ];
   const H = map.length;
@@ -561,4 +628,59 @@ export function batFrames(): HTMLCanvasElement[] {
     frames.push(c);
   }
   return frames;
+}
+
+/**
+ * 32×32 archangel, wings spread, halo overhead, a trumpet raised; two frames
+ * (wings up / wings down) for a slow flap.
+ */
+export function angelSheet(): HTMLCanvasElement {
+  const frames = [0, 1].map((f) => {
+    const [c, ctx] = canvas(32, 32);
+    const r = (x: number, y: number, w: number, h: number, col: string) => {
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y, w, h);
+    };
+    // wings: stacked feather rows fanning out from the shoulders
+    const wing = (side: 1 | -1) => {
+      for (let k = 0; k < 7; k++) {
+        const len = 11 - Math.abs(k - 2) * 1.4;
+        const y = (f === 0 ? 5 : 9) + k * 2 - (f === 0 ? Math.max(0, 3 - k) : 0);
+        const x0 = side > 0 ? 18 : 14 - Math.round(len);
+        r(x0, y, Math.round(len), 2, k % 2 ? '#dfe6f2' : '#ffffff');
+        r(side > 0 ? x0 + Math.round(len) - 1 : x0, y + 1, 1, 1, '#b8c4d8');
+      }
+    };
+    wing(-1);
+    wing(1);
+    // robe
+    r(13, 12, 6, 14, '#f4f0e6');
+    r(12, 18, 8, 8, '#f4f0e6');
+    r(11, 23, 10, 4, '#ece6d6');
+    r(17, 12, 2, 15, '#d8d0bc');
+    r(13, 16, 6, 1, '#e0b040'); // golden sash
+    r(15, 17, 1, 4, '#e0b040');
+    // head, golden hair
+    r(14, 6, 4, 5, '#f2d0b0');
+    r(13, 5, 6, 2, '#f0c040');
+    r(13, 7, 1, 4, '#f0c040');
+    r(18, 7, 1, 4, '#f0c040');
+    r(15, 8, 1, 1, '#3a2a20');
+    r(17, 8, 1, 1, '#3a2a20');
+    // arms raised to a golden trumpet
+    r(19, 11, 2, 2, '#f4f0e6');
+    r(21, 9, 1, 3, '#f2d0b0');
+    r(21, 6, 6, 1, '#f0c040');
+    r(26, 4, 2, 5, '#ffd860');
+    r(12, 13, 1, 5, '#f4f0e6');
+    r(12, 18, 1, 1, '#f2d0b0');
+    outline(ctx, 32, 32, '#6a5a3a');
+    // halo floats free of the outline
+    r(13, 1, 6, 1, '#fff2a0');
+    r(12, 2, 1, 1, '#fff2a0');
+    r(19, 2, 1, 1, '#fff2a0');
+    r(13, 3, 6, 1, '#ffe070');
+    return c;
+  });
+  return sheet(frames);
 }

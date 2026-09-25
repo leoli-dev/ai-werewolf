@@ -8,7 +8,7 @@ import type { HouseRefs } from './town';
  * smoking for the rest of the game.
  */
 
-const Kind = { Fire: 0, Smoke: 1, Dust: 2, Ember: 3, Blood: 4 } as const;
+const Kind = { Fire: 0, Smoke: 1, Dust: 2, Ember: 3, Blood: 4, Toxic: 5, Drip: 6, Bubble: 7, Star: 8, Mote: 9 } as const;
 type Kind = (typeof Kind)[keyof typeof Kind];
 
 interface Spawn {
@@ -37,6 +37,17 @@ const SMOKE = new THREE.Color(0.042, 0.039, 0.036);
 const SMOKE_HOT = new THREE.Color(0.9, 0.28, 0.05);
 const DUST = new THREE.Color(0.06, 0.05, 0.04);
 const BLOOD = new THREE.Color(0.2, 0.003, 0.002);
+const TOXIC = new THREE.Color(0.16, 0.42, 0.05);
+const TOXIC_DARK = new THREE.Color(0.03, 0.07, 0.02);
+const DRIP = new THREE.Color(0.25, 0.75, 0.08);
+
+/** A continuous source (poison fumes, sparkles, holy motes) that runs for a while. */
+interface Emitter {
+  left: number;
+  rate: number;
+  acc: number;
+  spawn: () => void;
+}
 
 const vert = `
   attribute float size;
@@ -58,6 +69,18 @@ const frag = (grid: number) => `
     if (r > 1.0) discard;
     float a = 1.0 - r;
     gl_FragColor = vec4(vTint.rgb, vTint.a * a * a);
+  }`;
+// a four-pointed pixel twinkle (✦) on a 9×9 grid
+const starFrag = `
+  varying vec4 vTint;
+  void main(){
+    vec2 q = floor(gl_PointCoord * 9.0) - 4.0;
+    vec2 aq = abs(q);
+    float a = 0.0;
+    if (aq.x == 0.0 || aq.y == 0.0) a = 1.0 - (aq.x + aq.y) / 5.0;
+    else if (aq.x == 1.0 && aq.y == 1.0) a = 0.45;
+    if (a <= 0.0) discard;
+    gl_FragColor = vec4(vTint.rgb, vTint.a * a);
   }`;
 
 /** A fixed-size pool of point particles simulated on the CPU. */
@@ -86,7 +109,7 @@ class Layer {
   private active = 0;
   readonly uniforms = { scale: { value: 600 } };
 
-  constructor(cap: number, additive: boolean, order: number) {
+  constructor(cap: number, additive: boolean, order: number, star = false) {
     this.cap = cap;
     this.pos = new Float32Array(cap * 3);
     this.vel = new Float32Array(cap * 3);
@@ -114,7 +137,7 @@ class Layer {
       new THREE.ShaderMaterial({
         uniforms: this.uniforms,
         vertexShader: vert,
-        fragmentShader: frag(additive ? 6 : 8),
+        fragmentShader: star ? starFrag : frag(additive ? 6 : 8),
         transparent: true,
         depthWrite: false,
         blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -223,6 +246,32 @@ class Layer {
           c.copy(BLOOD);
           alpha *= k < 0.7 ? 1 : 1 - (k - 0.7) / 0.3;
           break;
+        case Kind.Toxic:
+          c.copy(TOXIC).lerp(TOXIC_DARK, k);
+          alpha *= Math.min(1, age / 0.3) * Math.pow(1 - k, 1.2);
+          break;
+        case Kind.Drip:
+          c.copy(DRIP);
+          alpha *= 1 - k * k;
+          break;
+        case Kind.Bubble: {
+          // swell, then pop
+          c.setRGB(0.5, 1.9, 0.3);
+          alpha *= k < 0.85 ? 0.8 : 0;
+          break;
+        }
+        case Kind.Star: {
+          const tw = 0.55 + 0.45 * Math.sin(t * 17 + i * 2.3);
+          c.setRGB(2.6 * tw, 2.4 * tw, 1.6 + 1.4 * tw);
+          alpha *= Math.sin(k * Math.PI);
+          break;
+        }
+        case Kind.Mote: {
+          const tw = 0.7 + 0.3 * Math.sin(t * 9 + i);
+          c.setRGB(2.4 * tw, 1.8 * tw, 0.7 * tw);
+          alpha *= Math.sin(k * Math.PI);
+          break;
+        }
         case Kind.Ember: {
           const flick = 0.55 + 0.45 * Math.sin(t * 31 + i * 1.7);
           c.setRGB(3.4 * flick, 1.3 * flick, 0.3 * flick);
@@ -301,6 +350,8 @@ export class Explosions {
   private smoke = new Layer(2400, false, 2);
   private fire = new Layer(1800, false, 3);
   private sparks = new Layer(900, true, 4);
+  private stars = new Layer(400, true, 6, true);
+  private emitters: Emitter[] = [];
   private blasts: Blast[] = [];
   private ruins: Ruin[] = [];
   /** Blown-out chunks lying about the plaza. */
@@ -316,7 +367,7 @@ export class Explosions {
   shake = 0;
 
   constructor(scene: THREE.Scene) {
-    this.group.add(this.smoke.points, this.fire.points, this.sparks.points, this.flashLight);
+    this.group.add(this.smoke.points, this.fire.points, this.sparks.points, this.stars.points, this.flashLight);
     for (let k = 0; k < 4; k++) {
       const l = new THREE.PointLight(0xff7a30, 0, 16, 1.6);
       this.firePool.push(l);
@@ -328,7 +379,7 @@ export class Explosions {
   /** Pixels per world unit at distance 1 (point sprites scale by it). */
   setViewport(heightPx: number, fovDeg: number) {
     const scale = heightPx / (2 * Math.tan(THREE.MathUtils.degToRad(fovDeg) / 2));
-    for (const l of [this.smoke, this.fire, this.sparks]) l.uniforms.scale.value = scale;
+    for (const l of this.layers) l.uniforms.scale.value = scale;
   }
 
   /** A spray of blood from `at`, thrown mostly along `dir` (a wolf kill through the doorway). */
@@ -342,6 +393,71 @@ export class Explosions {
     // a heavier mist hanging in the doorway
     for (let k = 0; k < 18 * amount; k++) {
       this.smoke.spawn({ kind: Kind.Blood, pos: at, vel: d.clone().multiplyScalar(rand(0.5, 1.5)).add(randomDir().multiplyScalar(0.5)), life: rand(0.6, 1.2), size: [0.5, 1.1], alpha: 0.55, drag: 3 });
+    }
+  }
+
+  private get layers() {
+    return [this.smoke, this.fire, this.sparks, this.stars];
+  }
+
+  /** Run `spawn` `rate` times a second for `seconds`. */
+  private emit(seconds: number, rate: number, spawn: () => void) {
+    this.emitters.push({ left: seconds, rate, acc: 0, spawn });
+  }
+
+  /** A random point on the walls / roof of `house` (world space), pushed `out` beyond the surface. */
+  private onHouse(house: HouseRefs, out = 0.1, top = 1): THREE.Vector3 {
+    const { w, d, h } = house.size;
+    const side = Math.random();
+    const y = rand(0.4, h * top + (top > 1 ? 1.5 : 0));
+    const p =
+      side < 0.5
+        ? new THREE.Vector3(rand(-w / 2, w / 2), y, (d / 2 + out) * (side < 0.35 ? 1 : -1))
+        : new THREE.Vector3((w / 2 + out) * (side < 0.75 ? 1 : -1), y, rand(-d / 2, d / 2));
+    return house.group.localToWorld(p);
+  }
+
+  /** 预言家: ✦ twinkles winking on and off all round `house`. */
+  sparkles(house: HouseRefs, seconds: number) {
+    this.emit(seconds, 38, () => {
+      const p = this.onHouse(house, rand(0.3, 1.6), 1.6);
+      this.stars.spawn({ kind: Kind.Star, pos: p, vel: new THREE.Vector3(0, rand(0.1, 0.5), 0), life: rand(0.5, 1.1), size: [rand(0.5, 1.1), rand(0.2, 0.5)] });
+    });
+  }
+
+  /** 银水: green fumes seeping out of `house`, poison running down its walls, bubbles bursting. */
+  toxic(house: HouseRefs, seconds: number) {
+    const { h } = house.size;
+    this.emit(seconds, 26, () => {
+      const p = this.onHouse(house, 0.2, 1.2);
+      this.smoke.spawn({ kind: Kind.Toxic, pos: p, vel: new THREE.Vector3(rand(-0.3, 0.3), rand(0.3, 0.9), rand(-0.3, 0.3)), life: rand(2, 3.5), size: [0.8, 2.6], alpha: 0.75, drag: 0.8, lift: 0.4, wind: 0.4 });
+    });
+    this.emit(seconds, 30, () => {
+      const p = this.onHouse(house, 0.06).setY(rand(h * 0.5, h));
+      this.smoke.spawn({ kind: Kind.Drip, pos: p, vel: new THREE.Vector3(0, -rand(0.1, 0.4), 0), life: rand(1, 2), size: [0.16, 0.12], gravity: 1.2, drag: 1.5 });
+    });
+    this.emit(seconds, 14, () => {
+      const p = this.onHouse(house, 0.15).setY(rand(0.2, 0.7));
+      this.sparks.spawn({ kind: Kind.Bubble, pos: p, vel: new THREE.Vector3(rand(-0.2, 0.2), rand(0.3, 0.8), rand(-0.2, 0.2)), life: rand(0.5, 1), size: [0.1, 0.45], drag: 1 });
+    });
+  }
+
+  /** 金水: golden motes rising round `center` in a ring of radius `r`. */
+  motes(center: THREE.Vector3, r: number, seconds: number) {
+    this.emit(seconds, 40, () => {
+      const a = rand(0, Math.PI * 2);
+      const rr = r * rand(0.85, 1.05);
+      const p = center.clone().add(new THREE.Vector3(Math.cos(a) * rr, rand(0.1, 1), Math.sin(a) * rr));
+      this.sparks.spawn({ kind: Kind.Mote, pos: p, vel: new THREE.Vector3(0, rand(1, 2.4), 0), life: rand(1.5, 3), size: [0.22, 0.12], drag: 0.3 });
+    });
+  }
+
+  /** A puff of dust (someone drops dead where they stood). */
+  puff(at: THREE.Vector3) {
+    for (let k = 0; k < 40; k++) {
+      const a = rand(0, Math.PI * 2);
+      const v = new THREE.Vector3(Math.cos(a), rand(0.1, 0.5), Math.sin(a)).multiplyScalar(rand(1, 3));
+      this.smoke.spawn({ kind: Kind.Dust, pos: at.clone().setY(0.3), vel: v, life: rand(0.8, 1.6), size: [0.6, 1.8], alpha: 0.6, drag: 2.5, lift: 0.3 });
     }
   }
 
@@ -520,7 +636,8 @@ export class Explosions {
       if (!b.resolved) b.done();
     }
     this.blasts = [];
-    for (const l of [this.smoke, this.fire, this.sparks]) l.clear();
+    for (const l of this.layers) l.clear();
+    this.emitters = [];
     this.flashLight.intensity = 0;
     this.flash = 0;
     this.shake = 0;
@@ -531,6 +648,11 @@ export class Explosions {
     this.shake *= Math.exp(-dt * 2.2);
     this.flashLight.intensity *= Math.exp(-dt * 2.4);
 
+    for (const e of this.emitters) {
+      e.left -= dt;
+      for (e.acc += dt * e.rate; e.acc >= 1; e.acc--) e.spawn();
+    }
+    this.emitters = this.emitters.filter((e) => e.left > 0);
     for (const b of this.blasts) this.stepBlast(b, dt);
     for (const b of this.blasts) if (b.t >= 14) this.group.remove(b.ring);
     this.blasts = this.blasts.filter((b) => b.t < 14);
@@ -560,7 +682,7 @@ export class Explosions {
       }
     }
 
-    for (const l of [this.smoke, this.fire, this.sparks]) l.update(dt, t, this.wind);
+    for (const l of this.layers) l.update(dt, t, this.wind);
   }
 
   private stepBlast(b: Blast, dt: number) {

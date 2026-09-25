@@ -137,24 +137,26 @@ describe('Game engine', () => {
     }
   });
 
-  it('seer check info vanishes if the seer dies that night', async () => {
-    // wolves always kill the seer; guard/witch never help
+  it('seer is told the result at once, even if killed that night', async () => {
     for (let seed = 1; seed <= 20; seed++) {
       const g = new Game({ names, humanSeat: -1, seed, wolfChatRounds: 1 });
       const seer = g.players.find((p) => p.role === 'seer')!.id;
       const agent: Agent = {
         speak: async () => 'pass',
         choose: async (r) => {
+          if (r.day > 1) throw new Error('stop');
           if (r.action === 'wolfKill') return seer;
           if (r.action === 'seer') return r.candidates[0];
-          if (r.action === 'vote' || r.action === 'revote') return r.candidates[0];
           return null;
         },
       };
       g.setAgents(names.map(() => agent));
-      await g.run();
-      expect(g.events.some((e) => e.data?.check !== undefined)).toBe(false);
-      expect(Object.keys(g.state.seerChecks)).toHaveLength(0);
+      await g.run().catch(() => {});
+      const result = g.events.findIndex((e) => e.data?.check !== undefined);
+      const nightStepAfter = g.events.findIndex((e) => e.text.startsWith('守卫请睁眼'));
+      expect(result).toBeGreaterThanOrEqual(0);
+      expect(result).toBeLessThan(nightStepAfter);
+      expect(Object.keys(g.state.seerChecks)).toHaveLength(1);
     }
   });
 
@@ -199,7 +201,7 @@ describe('Game engine', () => {
       },
       choose: agent.choose,
     };
-    const g2 = new Game({ names, humanSeat: 0, humanRole: 'werewolf', seed: 5, wolfChatRounds: 3 }, { cue: async (c) => void cues.push(c) });
+    const g2 = new Game({ names, humanSeat: 0, humanRole: 'werewolf', seed: 5, wolfChatRounds: 3 }, { cue: async (c) => void (typeof c === 'string' && cues.push(c)) });
     for (const game of [g, g2]) game.setAgents(names.map((_, i) => (i === 0 ? human : agent)));
     await g2.run().catch(() => {});
     // AI wolves pass from round 2, but the human still gets the last word every round;

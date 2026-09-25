@@ -39,6 +39,15 @@ stage.sounds = {
   growl: (v) => audio.growl(v),
   scream: (v) => audio.scream(v),
   bell: (v) => audio.bell(v),
+  guardCast: (v) => audio.guardCast(v),
+  sparkle: (v) => audio.sparkle(v),
+  reveal: (wolf) => audio.reveal(wolf),
+  poison: (v) => audio.poison(v),
+  groan: (v) => audio.groan(v),
+  hymn: () => audio.hymn(),
+  lock: () => audio.lock(),
+  gunshot: () => audio.gunshot(),
+  hit: (v) => audio.hit(v),
 };
 
 // sound settings apply everywhere (title screen included)

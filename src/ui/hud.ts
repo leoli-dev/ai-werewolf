@@ -1,4 +1,4 @@
-import type { Game, GameState, NightStep, SceneCue } from '../game/game';
+import type { Game, GameState, NightStep, RoleCue, SceneCue } from '../game/game';
 import { canSee } from '../game/game';
 import {
   ROLE_NAME,
@@ -158,7 +158,8 @@ export class GameUI {
     const k = this.view().known[id];
     const ring = this.ringOf(id);
     if (id === this.me) return { text: ROLE_NAME[p.role], cls: 'me', ring };
-    if (k === 'werewolf') return { text: '狼队友', cls: 'wolf' };
+    // a wolf you checked as the seer is a check result, not a teammate
+    if (k === 'werewolf' && this.game.players[this.me].role === 'werewolf') return { text: '狼队友', cls: 'wolf' };
     if (ring) return { text: `查验：${ROLE_NAME[this.game.state.seerChecks[id]]}`, cls: ring, ring };
     return null;
   }
@@ -391,7 +392,17 @@ export class GameUI {
     const iSeeWolves = this.game.players[this.me].role === 'werewolf' || this.godView;
     this.wolvesShown = night && s.nightStep === 'wolves' && iSeeWolves ? this.game.wolves().filter((w) => w.alive).map((w) => w.id) : [];
     this.lastHowlStep = `${s.day}:${s.nightStep}`;
-    this.stage.restore({ dead, exiled, exploded, indoors: night, wolves: this.wolvesShown, night });
+    // tonight's own actions that leave a mark until dawn: the guard's bell, houses gone dark
+    let guarded: number | null = null;
+    const darkened: number[] = [];
+    if (night) {
+      for (const e of this.game.events) {
+        if (e.day !== s.day || e.phase !== 'night' || !this.canSee(e) || !e.data) continue;
+        if (typeof e.data.guard === 'number') guarded = e.data.guard;
+        for (const k of ['poison', 'shot'] as const) if (typeof e.data[k] === 'number') darkened.push(e.data[k] as number);
+      }
+    }
+    this.stage.restore({ dead, exiled, exploded, indoors: night, wolves: this.wolvesShown, night, guarded, darkened });
     this.onState(s);
     this.renderTabs();
   }
@@ -513,6 +524,7 @@ export class GameUI {
    * the pack is back indoors). Capped so a hidden tab (paused rAF) never stalls the game.
    */
   cue(c: SceneCue): Promise<void> {
+    if (typeof c === 'object') return this.roleCue(c);
     const iSeeWolves = this.game.players[this.me].role === 'werewolf' || this.godView;
     let job: Promise<void> = Promise.resolve();
     switch (c) {
@@ -546,6 +558,38 @@ export class GameUI {
     }
     // capped so a hidden tab (paused rAF) never stalls the game; the attack takes a while
     return Promise.race([job, new Promise<void>((r) => setTimeout(r, c === 'wolvesIn' ? 40000 : 12000))]);
+  }
+
+  /**
+   * A night role's action plays out only for the player who took it (or god view);
+   * for anyone else it resolves at once, so its length gives nothing away. The
+   * hunter's day shot is public.
+   */
+  private roleCue(c: RoleCue): Promise<void> {
+    if (c.kind !== 'dayShot' && c.actor !== this.me && !this.godView) return Promise.resolve();
+    const home = this.me;
+    let job: Promise<void>;
+    switch (c.kind) {
+      case 'guard':
+        job = this.stage.guardCover(c.target, home);
+        break;
+      case 'seer':
+        job = this.stage.seerReveal(c.target, this.game.players[c.target].role === 'werewolf', home);
+        break;
+      case 'witchPoison':
+        job = this.stage.witchPoison(c.target, home);
+        break;
+      case 'witchSave':
+        job = this.stage.witchSave(c.target, home);
+        break;
+      case 'nightShot':
+        job = this.stage.nightShot(c.target, home);
+        break;
+      case 'dayShot':
+        job = this.stage.dayShot(c.target);
+        break;
+    }
+    return Promise.race([job, new Promise<void>((r) => setTimeout(r, 20000))]);
   }
 
   // ───────────────────────── roster / role card ─────────────────────────
