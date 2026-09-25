@@ -67,6 +67,11 @@ const BUBBLE_COLORS: { bg: string; edge: string }[] = [
   { bg: '#eeeeea', edge: '#55554f' }, // 12 light grey
 ];
 
+/** Roster / label colour of a known role: wolves red, the gods (神职) green, villagers plain. */
+function roleCls(role: Role): 'wolf' | 'god' | 'good' {
+  return teamOf(role) === 'wolf' ? 'wolf' : role === 'villager' ? 'good' : 'god';
+}
+
 export function bubbleColor(id: number) {
   return BUBBLE_COLORS[id % BUBBLE_COLORS.length];
 }
@@ -103,7 +108,8 @@ export class GameUI {
   private chatFilter!: HTMLElement;
   private action!: HTMLElement;
   private labelEls: HTMLElement[] = [];
-  private bubbles = new Map<number, { text: string; seq: number }>();
+  /** `spot`: a defense or last words after the vote, the only bubble on the plaza. */
+  private bubbles = new Map<number, { text: string; seq: number; spot: boolean }>();
   private bubbleSeq = 0;
   private tab: Tab = 'round';
   private playerFilter: number | null = null;
@@ -132,6 +138,8 @@ export class GameUI {
   private unreadSpeech = false;
   /** A ready speech held back until the human asks for it (see holdSpeech). */
   private held: { speaker: number; release: () => void } | null = null;
+  /** The exile's last words are over: waiting for the human to send them off (see confirmExile). */
+  private exileWait: (() => void) | null = null;
   private cleanups: (() => void)[] = [];
 
   constructor(
@@ -169,14 +177,14 @@ export class GameUI {
   private knownOf(id: number): { text: string; cls: string; ring?: 'good' | 'wolf' } | null {
     const p = this.game.players[id];
     if (this.godView || this.game.state.phase === 'ended') {
-      return { text: ROLE_NAME[p.role], cls: teamOf(p.role) === 'wolf' ? 'wolf' : 'good', ring: this.ringOf(id) };
+      return { text: ROLE_NAME[p.role], cls: roleCls(p.role), ring: this.ringOf(id) };
     }
     const k = this.view().known[id];
     const ring = this.ringOf(id);
     if (id === this.me) return { text: ROLE_NAME[p.role], cls: 'me', ring };
     // a wolf you checked as the seer is a check result, not a teammate
     if (k === 'werewolf' && this.game.players[this.me].role === 'werewolf') return { text: '狼队友', cls: 'wolf' };
-    if (ring) return { text: `查验：${ROLE_NAME[this.game.state.seerChecks[id]]}`, cls: ring, ring };
+    if (ring) return { text: `查验：${ROLE_NAME[this.game.state.seerChecks[id]]}`, cls: roleCls(this.game.state.seerChecks[id]!), ring };
     return null;
   }
 
@@ -247,10 +255,11 @@ export class GameUI {
   /** Space / Enter / → reveals a held speech; switching 逐条查看 off lets it through. */
   private bindNextSpeech() {
     const onKey = (e: KeyboardEvent) => {
-      if (!this.held || e.repeat || !['Enter', ' ', 'ArrowRight'].includes(e.key)) return;
+      const go = this.held?.release ?? this.exileWait;
+      if (!go || e.repeat || !['Enter', ' ', 'ArrowRight'].includes(e.key)) return;
       if ((e.target as HTMLElement).closest?.('input, textarea, select, button, .modal-back')) return;
       e.preventDefault();
-      this.held.release();
+      go();
     };
     document.addEventListener('keydown', onKey);
     this.cleanups.push(() => document.removeEventListener('keydown', onKey));
@@ -286,6 +295,34 @@ export class GameUI {
         ),
       );
       this.action.classList.add('show');
+    });
+  }
+
+  /**
+   * The exile has said their last words: they stay on the plaza with the words
+   * overhead until the human confirms, then walk out of town and night falls.
+   */
+  confirmExile(id: number): Promise<void> {
+    return new Promise((resolve) => {
+      const go = () => {
+        if (this.exileWait !== go) return;
+        this.exileWait = null;
+        this.close();
+        this.bubbles.clear();
+        this.pendingExile.delete(id);
+        this.stage.exiled(id);
+        resolve();
+      };
+      this.exileWait = go;
+      const p = this.game.players[id];
+      this.open(
+        h(
+          'div',
+          { class: 'next-speech' },
+          h('div', { class: 'hint' }, `${seat(id)} ${p.name} 的遗言已结束`),
+          h('button', { class: 'btn primary', onclick: go }, '确定放逐 ▶'),
+        ),
+      );
     });
   }
 
@@ -494,10 +531,14 @@ export class GameUI {
   }
 
   private trackBubble(e: GameEvent) {
+    // the day's talk stays up through the vote; the result clears the plaza so the
+    // tied players' defenses or the exile's last words stand alone
+    if (e.type === 'vote') this.bubbles.clear();
     if ((e.type === 'speech' || e.type === 'wolfChat') && e.speaker !== undefined) {
       // every speaker keeps their latest words over their head (day: until everyone
       // goes home at nightfall; wolf chat: until the pack is back indoors)
-      this.bubbles.set(e.speaker, { text: e.text, seq: ++this.bubbleSeq });
+      const spot = e.speechKind === 'defense' || e.speechKind === 'lastWords';
+      this.bubbles.set(e.speaker, { text: e.text, seq: ++this.bubbleSeq, spot });
     }
   }
 
@@ -888,12 +929,12 @@ export class GameUI {
       const thinking = actor === i && this.held?.speaker !== i;
       // newest words on top; hovering a bubble brings it to the front (CSS)
       el.style.zIndex = this.raised === i ? '9999' : String(b ? 10 + b.seq : 1);
-      const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? b.text : ''}|${thinking}`;
+      const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? `${b.spot}:${b.text}` : ''}|${thinking}`;
       if (el.dataset.key === key) return;
       el.dataset.key = key;
       el.className = `label ${pl.alive ? '' : 'dead'} ${i === this.me ? 'me' : ''}`;
       const parts = [
-        b ? h('div', { class: 'bubble', style: bubbleStyle(i) }, b.text) : null,
+        b ? h('div', { class: `bubble ${b.spot ? 'spot' : ''}`, style: bubbleStyle(i) }, b.text) : null,
         thinking ? h('div', { class: 'thinking' }, '...') : null,
         k && i !== this.me && !k.ring ? h('div', { class: `role-tag ${k.cls}` }, k.text) : null,
         k?.ring ? h('div', { class: `role-tag ${k.ring}` }, ROLE_NAME[this.game.state.seerChecks[i] ?? pl.role]) : null,

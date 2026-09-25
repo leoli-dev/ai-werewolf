@@ -80,6 +80,8 @@ export interface GameHooks {
   restored?(): void;
   /** A day speech is ready: resolve to let it be heard (the host may hold it until the human has read the last one). */
   beforeSpeech?(speaker: number): Promise<void>;
+  /** The exile has had their last words (and the hunter's shot): resolve to send them off and start the night. */
+  confirmExile?(id: number): Promise<void>;
 }
 
 export class GameAborted extends Error {}
@@ -711,7 +713,14 @@ export class Game {
     if (this.endIfWon()) return;
     this.setPhase('lastWords');
     await this.speech(exiled, 'lastWords', '遗言');
-    if (this.players[exiled].role === 'hunter') await this.hunterOnDeath();
+    if (this.players[exiled].role === 'hunter' && (await this.hunterOnDeath())) return;
+    // the exile stays on the plaza, last words overhead, until the human sends them off
+    await this.gate();
+    if (!this.replaying && this.hooks.confirmExile) {
+      this.checkRestored();
+      await this.hooks.confirmExile(exiled);
+      await this.gate();
+    }
   }
 
   /** Returns the ids with the top vote count (empty if everyone abstained). */

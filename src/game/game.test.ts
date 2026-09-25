@@ -112,6 +112,39 @@ describe('Game engine', () => {
     expect(released).toHaveLength(heard.length);
   });
 
+  it('an exile is only sent off after their last words, before the night starts', async () => {
+    let confirmed = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const log: string[] = [];
+      const g = new Game(
+        { names, humanSeat: -1, seed, wolfChatRounds: 1 },
+        {
+          confirmExile: async (id) => void log.push(`confirm:${id}`),
+          onEvent: (e) => {
+            if (e.type === 'speech' && e.speechKind === 'lastWords') log.push(`lastWords:${e.speaker}`);
+            if (e.type === 'death' && e.data?.cause === 'vote') log.push(`exile:${e.data.id}`);
+          },
+          onState: (s) => {
+            if (s.phase === 'night' && log.at(-1) !== 'night') log.push('night');
+          },
+        },
+      );
+      g.setAgents(names.map((_, i) => new MockAgent(i + seed * 100)));
+      await g.run();
+      log.forEach((x, i) => {
+        if (!x.startsWith('confirm:')) return;
+        confirmed++;
+        const id = x.slice(8);
+        expect(log.slice(0, i)).toContain(`lastWords:${id}`);
+        expect(log[i + 1] ?? 'night').toBe('night');
+      });
+      // every exile that didn't end the game got confirmed
+      const exiles = log.filter((x) => x.startsWith('exile:')).length;
+      expect(log.filter((x) => x.startsWith('confirm:')).length).toBeGreaterThanOrEqual(exiles - 1);
+    }
+    expect(confirmed).toBeGreaterThan(0);
+  });
+
   it('a wolf self-destructing ends the day: rest of the speeches and the vote are skipped', async () => {
     for (let seed = 1; seed <= 20; seed++) {
       const g = new Game({ names, humanSeat: -1, seed, wolfChatRounds: 1 });
