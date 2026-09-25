@@ -42,6 +42,12 @@ const ACTION_TITLE: Record<TargetRequest['action'], string> = {
 
 type Tab = 'round' | 'all' | 'wolf' | 'private';
 
+/** Phone-sized screens (portrait, or a landscape phone): the HUD folds into a bottom dock + sheets. */
+const MOBILE = window.matchMedia('(max-width: 760px), (max-height: 520px)');
+
+/** Mobile: which sheet is pulled up over the scene. */
+type Sheet = 'none' | 'players' | 'chat';
+
 /**
  * One clearly different bubble colour per seat (12 distinct colour families,
  * ordered so neighbouring seats never look alike), reused in the chat log.
@@ -117,6 +123,12 @@ export class GameUI {
   readonly agent: Agent;
   private engineChip = h('div', { class: 'engine panel', title: 'AI 引擎状态' });
   private engineStats = { ok: 0, fail: 0, fallback: 0, lastMs: 0 };
+  private dock!: HTMLElement;
+  private sheet: Sheet = 'none';
+  private unread = 0;
+  /** Label tapped last (touch has no hover to bring a buried bubble to the front). */
+  private raised: number | null = null;
+  private cleanups: (() => void)[] = [];
 
   constructor(
     private root: HTMLElement,
@@ -175,8 +187,6 @@ export class GameUI {
   private build() {
     const me = this.game.players[this.me];
     const portrait = characterCanvas(this.looks[this.me]);
-    portrait.style.width = '64px';
-    portrait.style.height = '96px';
     this.roleCard = h('div', { class: 'role-card panel' });
     this.roleCard.append(
       portrait,
@@ -203,8 +213,8 @@ export class GameUI {
       { id: 'topright' },
       this.engineChip,
       this.muteBtn(),
-      h('button', { class: 'btn', onclick: () => showRules(this.root) }, '规则说明'),
-      h('button', { class: 'btn', title: '暂停（Esc）', onclick: () => this.opts.onPause() }, '暂停'),
+      h('button', { class: 'btn', title: '规则说明', 'aria-label': '规则说明', onclick: () => showRules(this.root) }, h('span', { class: 'long' }, '规则说明'), h('span', { class: 'short' }, '?')),
+      h('button', { class: 'btn', title: '暂停（Esc）', 'aria-label': '暂停', onclick: () => this.opts.onPause() }, h('span', { class: 'long' }, '暂停'), h('span', { class: 'short' }, 'Ⅱ')),
     );
 
     this.chatTabs = h('div', { class: 'tabs', role: 'tablist' });
@@ -215,7 +225,9 @@ export class GameUI {
     this.action = h('div', { id: 'action', class: 'panel' });
 
     this.stepEl = h('div', { id: 'nightstep', 'aria-live': 'polite' });
-    this.root.append(this.hud, this.banner, topright, chat, this.action, this.stepEl);
+    this.dock = h('nav', { id: 'dock', class: 'panel', 'aria-label': '面板' });
+    this.root.append(this.hud, this.banner, topright, chat, this.action, this.stepEl, this.dock);
+    this.bindMobile();
 
     for (let i = 0; i < 12; i++) {
       const el = h('div', { class: 'label' });
@@ -224,6 +236,69 @@ export class GameUI {
     }
     this.renderTabs();
     this.renderRoster();
+  }
+
+  /**
+   * Mobile plumbing: the sheets sit above the dock and the action panel, and the
+   * action panel above the on-screen keyboard (CSS reads these as variables).
+   */
+  private bindMobile() {
+    const root = this.root;
+    const actionH = new ResizeObserver(() => root.style.setProperty('--action-h', `${this.action.offsetHeight}px`));
+    actionH.observe(this.action);
+    this.cleanups.push(() => actionH.disconnect());
+    const vv = window.visualViewport;
+    if (vv) {
+      const onViewport = () => root.style.setProperty('--kb', `${Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))}px`);
+      vv.addEventListener('resize', onViewport);
+      vv.addEventListener('scroll', onViewport);
+      this.cleanups.push(() => {
+        vv.removeEventListener('resize', onViewport);
+        vv.removeEventListener('scroll', onViewport);
+      });
+    }
+    const onMedia = () => {
+      if (!MOBILE.matches) this.setSheet('none');
+    };
+    MOBILE.addEventListener('change', onMedia);
+    this.cleanups.push(() => MOBILE.removeEventListener('change', onMedia));
+    // a tapped bubble comes to the front (the desktop gets this from :hover)
+    const onLabelTap = (e: PointerEvent) => {
+      const i = this.labelEls.indexOf((e.target as HTMLElement).closest('.label') as HTMLElement);
+      if (i >= 0) this.raised = i;
+    };
+    this.labelsRoot.addEventListener('pointerdown', onLabelTap);
+    this.cleanups.push(() => this.labelsRoot.removeEventListener('pointerdown', onLabelTap));
+    this.renderDock();
+  }
+
+  private setSheet(sheet: Sheet) {
+    this.sheet = sheet;
+    if (sheet === 'none') delete this.root.dataset.sheet;
+    else this.root.dataset.sheet = sheet;
+    if (sheet === 'chat') {
+      this.unread = 0;
+      this.chatLog.scrollTop = this.chatLog.scrollHeight;
+    }
+    this.renderDock();
+  }
+
+  private renderDock() {
+    const me = this.game.players[this.me];
+    const tab = (sheet: Sheet, ...label: (Node | string | null)[]) =>
+      h(
+        'button',
+        {
+          class: `dock-tab ${this.sheet === sheet ? 'on' : ''}`,
+          'aria-pressed': String(this.sheet === sheet),
+          onclick: () => this.setSheet(this.sheet === sheet ? 'none' : sheet),
+        },
+        ...label,
+      );
+    this.dock.replaceChildren(
+      tab('players', h('span', { class: `dock-role ${me.role === 'werewolf' ? 'wolf' : 'good'}` }, `${this.me + 1}号 ${ROLE_NAME[me.role]}`), '玩家'),
+      tab('chat', '记录', this.unread ? h('span', { class: 'badge' }, this.unread > 99 ? '99+' : String(this.unread)) : null),
+    );
   }
 
   /** Game time played so far, excluding pauses. */
@@ -324,6 +399,9 @@ export class GameUI {
 
   destroy() {
     this.unsubConfig();
+    for (const off of this.cleanups) off();
+    delete this.root.dataset.sheet;
+    for (const v of ['--action-h', '--kb']) this.root.style.removeProperty(v);
     clearInterval(this.actorTimer);
     clearInterval(this.clockTimer);
     for (const el of [...this.root.children]) el.remove();
@@ -604,6 +682,8 @@ export class GameUI {
     this.playerFilter = this.playerFilter === id ? null : id;
     this.renderRoster();
     this.renderChat();
+    // on a phone the log is folded away: show what the filter picked
+    if (MOBILE.matches && this.playerFilter !== null) this.setSheet('chat');
   }
 
   // ───────────────────────── chat ─────────────────────────
@@ -682,7 +762,13 @@ export class GameUI {
         el = h('div', { class: `msg ${e.type}` }, e.text);
     }
     this.chatLog.append(el);
-    if (scroll) this.chatLog.scrollTop = this.chatLog.scrollHeight;
+    if (scroll) {
+      this.chatLog.scrollTop = this.chatLog.scrollHeight;
+      if (MOBILE.matches && this.sheet !== 'chat') {
+        this.unread++;
+        this.renderDock();
+      }
+    }
   }
 
   // ───────────────────────── labels ─────────────────────────
@@ -700,7 +786,7 @@ export class GameUI {
       const b = this.bubbles.get(i);
       const thinking = actor === i;
       // newest words on top; hovering a bubble brings it to the front (CSS)
-      el.style.zIndex = String(b ? 10 + b.seq : 1);
+      el.style.zIndex = this.raised === i ? '9999' : String(b ? 10 + b.seq : 1);
       const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? b.text : ''}|${thinking}`;
       if (el.dataset.key === key) return;
       el.dataset.key = key;
@@ -822,7 +908,7 @@ export class GameUI {
       };
       this.open(
         h('div', { class: 'title' }, ACTION_TITLE[req.action]),
-        h('div', { class: 'hint' }, req.prompt, ' 也可以点击左侧列表或场景中的角色来选择。'),
+        h('div', { class: 'hint' }, req.prompt, MOBILE.matches ? ' 也可以在「玩家」列表或场景中点选角色。' : ' 也可以点击左侧列表或场景中的角色来选择。'),
         targets,
         h('div', { class: 'row' }, req.allowSkip ? h('button', { class: 'btn', onclick: () => finish(null) }, skipLabel[req.action] ?? '跳过') : null, confirmBtn),
       );
@@ -850,7 +936,7 @@ export class GameUI {
           h('div', { class: `winner ${s.winner}` }, s.winner === 'good' ? '好人胜利' : '狼人胜利'),
           h('p', { style: 'text-align:center' }, won ? '你所在的阵营赢得了这座小镇。' : '你所在的阵营输掉了这一局。'),
           h('div', { class: 'reveal' }, ...this.game.players.map((p) => h('div', { class: teamOf(p.role) === 'wolf' ? 'wolf' : '' }, `${seat(p.id)} ${p.name}`, h('br'), `${ROLE_NAME[p.role]}${p.alive ? '' : ' ✝'}`))),
-          h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => back.remove() }, '回看记录'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
+          h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => { back.remove(); if (MOBILE.matches) this.setSheet('chat'); } }, '回看记录'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
         ),
       );
       this.root.appendChild(back);

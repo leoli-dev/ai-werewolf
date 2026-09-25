@@ -715,47 +715,83 @@ export class Stage {
 
   private bindInput() {
     const el = this.renderer.domElement;
-    let dragging = false;
+    // touch: one finger orbits, two fingers pinch-zoom and pan (the page itself never scrolls or zooms)
+    el.style.touchAction = 'none';
+    const pointers = new Map<number, { x: number; y: number }>();
     let panning = false;
     let moved = 0;
     let lx = 0;
     let ly = 0;
+    let pinch: { dist: number; mx: number; my: number } | null = null;
+    const pinchOf = () => {
+      const [a, b] = [...pointers.values()];
+      return { dist: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+    };
+    const panBy = (dx: number, dy: number) => {
+      // grab the ground: it follows the pointer
+      const k = this.camDist * 0.0016;
+      const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+      const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+      this.pan.addScaledVector(right, -dx * k).addScaledVector(forward, dy * k);
+      if (this.pan.length() > MAX_PAN) this.pan.setLength(MAX_PAN);
+    };
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('dblclick', () => this.resetView(true));
     el.addEventListener('pointerdown', (e) => {
-      dragging = true;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      el.setPointerCapture(e.pointerId);
+      if (pointers.size === 2) {
+        pinch = pinchOf();
+        moved = Infinity; // a two-finger gesture is never a tap
+        return;
+      }
+      if (pointers.size > 2) return;
       // left drag orbits; right drag (or shift + left) pans
       panning = e.button === 2 || e.shiftKey;
       moved = 0;
       lx = e.clientX;
       ly = e.clientY;
-      el.setPointerCapture(e.pointerId);
     });
     el.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      p.x = e.clientX;
+      p.y = e.clientY;
+      this.dragReset = false;
+      if (pointers.size >= 2) {
+        if (!pinch || pointers.size > 2) return;
+        const now = pinchOf();
+        if (now.dist > 0 && pinch.dist > 0) {
+          this.userZoom = THREE.MathUtils.clamp(this.userZoom * (pinch.dist / now.dist), ZOOM_MIN, ZOOM_MAX);
+        }
+        panBy(now.mx - pinch.mx, now.my - pinch.my);
+        pinch = now;
+        return;
+      }
       const dx = e.clientX - lx;
       const dy = e.clientY - ly;
       moved += Math.abs(dx) + Math.abs(dy);
       lx = e.clientX;
       ly = e.clientY;
-      this.dragReset = false;
-      if (panning) {
-        // grab the ground: it follows the pointer
-        const k = this.camDist * 0.0016;
-        const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-        const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-        this.pan.addScaledVector(right, -dx * k).addScaledVector(forward, dy * k);
-        if (this.pan.length() > MAX_PAN) this.pan.setLength(MAX_PAN);
-        return;
-      }
+      if (panning) return panBy(dx, dy);
       this.dragYaw -= dx * 0.005;
       this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.003, PITCH_MIN, PITCH_MAX);
       this.pitchGoal = null;
     });
-    el.addEventListener('pointerup', (e) => {
-      dragging = false;
-      if (moved < 6 && e.button === 0) this.pick(e);
-    });
+    const release = (e: PointerEvent) => {
+      if (!pointers.delete(e.pointerId)) return;
+      if (e.type === 'pointerup' && pointers.size === 0 && moved < 6 && e.button === 0) this.pick(e);
+      pinch = null;
+      // the finger left on the glass carries on orbiting from where it is
+      const rest = [...pointers.values()][0];
+      if (rest) {
+        lx = rest.x;
+        ly = rest.y;
+        panning = false;
+      }
+    };
+    el.addEventListener('pointerup', release);
+    el.addEventListener('pointercancel', release);
     el.addEventListener(
       'wheel',
       (e) => {
@@ -838,7 +874,10 @@ export class Stage {
       ? this.shot.target.clone().add(this.pan)
       : (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
-    const dist = (this.shot ? this.shot.dist : focused ? 34 : 40) * this.userZoom; // stay wide enough to keep most of the ring (and their bubbles) in view
+    // stay wide enough to keep most of the ring (and their bubbles) in view; a tall
+    // (phone portrait) viewport sees less sideways, so it backs off a bit further
+    const aspectFit = THREE.MathUtils.clamp(1.3 / this.camera.aspect, 1, 2.1);
+    const dist = (this.shot ? this.shot.dist : focused ? 34 : 40) * this.userZoom * aspectFit;
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
     const sway = Math.sin(t * 0.05) * 0.12;
     {
