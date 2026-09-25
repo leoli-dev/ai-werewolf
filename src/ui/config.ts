@@ -1,4 +1,4 @@
-import { PROVIDERS, PROVIDER_IDS, effortsFor } from '../ai/catalog';
+import { PROVIDERS, PROVIDER_IDS, effortsFor, providerAvailable } from '../ai/catalog';
 import { OpenAICompatibleProvider, PROXY_AVAILABLE } from '../ai/provider';
 import { envProvider } from '../config';
 import { vault } from '../keyVault';
@@ -72,7 +72,15 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         ...PROVIDER_IDS.map((pid) =>
           h(
             'button',
-            { type: 'button', role: 'radio', 'aria-checked': String(pid === id), class: `btn ${pid === id ? 'on' : ''}`, onclick: () => { result.textContent = ''; served = []; setActiveProvider(pid); } },
+            {
+              type: 'button',
+              role: 'radio',
+              'aria-checked': String(pid === id),
+              class: `btn ${pid === id ? 'on' : ''}`,
+              disabled: !providerAvailable(pid),
+              title: providerAvailable(pid) ? null : '网页版无法访问本机模型服务，请在本地运行游戏后使用',
+              onclick: () => { result.textContent = ''; served = []; setActiveProvider(pid); },
+            },
             PROVIDERS[pid].label,
             PROVIDERS[pid].needsKey ? h('span', { class: `dot ${hints[pid] ? 'ok' : ''}`, title: hints[pid] ? '已保存 Key' : '未设置 Key' }) : null,
           ),

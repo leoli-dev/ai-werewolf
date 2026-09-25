@@ -109,6 +109,21 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
 
 export const PROVIDER_IDS: ProviderId[] = ['openai', 'deepseek', 'local'];
 
+/**
+ * A local server is only reachable when the page itself is served locally:
+ * from a public origin (e.g. GitHub Pages) the browser's CORS / private-network
+ * checks reject calls to 127.0.0.1. Outside a browser (tests, scripts) it is allowed.
+ */
+export function localReachable(): boolean {
+  const host = (globalThis as { location?: { hostname: string } }).location?.hostname;
+  return host === undefined || host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+}
+
+/** Providers that can be chosen from this page. */
+export function providerAvailable(id: ProviderId): boolean {
+  return id !== 'local' || localReachable();
+}
+
 /** Levels offered for a local server (it may or may not honour them). */
 export const LOCAL_EFFORTS = ['none', 'low', 'medium', 'high'];
 

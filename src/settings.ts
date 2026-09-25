@@ -1,4 +1,4 @@
-import { PROVIDERS, PROVIDER_IDS, clampEffort, effortsFor, type ProviderId } from './ai/catalog';
+import { PROVIDERS, PROVIDER_IDS, clampEffort, effortsFor, providerAvailable, type ProviderId } from './ai/catalog';
 import type { ProviderConfig } from './ai/provider';
 import { envProvider } from './config';
 import type { Role } from './game/types';
@@ -114,7 +114,7 @@ function loadConfig(): Config {
     paceMs: saved.paceMs ?? legacy.paceMs ?? 900,
     audio: { ...DEFAULT_AUDIO, muted: legacyMuted, ...saved.audio },
     llm: {
-      active: PROVIDER_IDS.includes(saved.llm?.active as ProviderId) ? saved.llm!.active : 'local',
+      active: PROVIDER_IDS.includes(saved.llm?.active as ProviderId) && providerAvailable(saved.llm!.active) ? saved.llm!.active : providerAvailable('local') ? 'local' : 'openai',
       profiles: Object.fromEntries(PROVIDER_IDS.map((id) => [id, sane(id, saved.llm?.profiles?.[id] ?? {})])) as Record<ProviderId, LlmProfile>,
     },
   };
