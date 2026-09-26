@@ -6,6 +6,7 @@ import { OpenAICompatibleProvider, SerialQueue } from './ai/provider';
 import { Game, GameAborted, ReplayMismatch } from './game/game';
 import { Rng } from './game/rng';
 import type { Agent } from './game/types';
+import type { Reviewer } from './game/ceremony';
 import { Stage } from './render/stage';
 import { audio } from './audio/audio';
 import { clearSave, readSave, writeSave, type SaveGame } from './save';
@@ -49,6 +50,8 @@ stage.sounds = {
   gunshot: () => audio.gunshot(),
   hit: (v) => audio.hit(v),
   howl: (v, pitch) => audio.howl(v, 0, pitch),
+  thud: (v) => audio.thud(v),
+  splat: (v) => audio.splat(v),
 };
 
 // sound settings apply everywhere (title screen included)
@@ -124,6 +127,11 @@ async function play(settings: Settings, save?: SaveGame) {
   });
   save?.agents.forEach((snap, i) => snap && agents[i].restore?.(snap as never));
   game.setAgents(agents);
+  // 颁奖典礼: every AI reviews the game (the human answers through the panel)
+  ui.setReviewers(
+    agents.map((a, i) => (i === humanSeat ? null : (a as Agent & Reviewer))),
+    () => agents.map((a) => (a instanceof LLMAgent ? a.notes : null)),
+  );
   // 配置 changes made from the pause menu reach the running game
   const unsubConfig = onConfigChange((c) => {
     game.setPace(c.paceMs);

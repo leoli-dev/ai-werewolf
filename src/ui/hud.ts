@@ -21,6 +21,8 @@ import { audio } from '../audio/audio';
 import { getConfig, onConfigChange, updateConfig } from '../settings';
 import { h } from './dom';
 import { showRules } from './rules';
+import { AwardCeremony, type CeremonyEntry } from './ceremony';
+import type { Reviewer } from '../game/ceremony';
 
 const ROLE_DESC: Record<Role, string> = {
   werewolf: '每晚与狼队商量并投票杀人；白天伪装成好人。屠边（神职或村民全灭）即胜。',
@@ -52,7 +54,7 @@ const SPEECH_KIND: Record<string, string> = {
   discussion: '', summary: '警长归票', lastWords: '遗言', defense: 'PK', campaign: '警上', campaignPk: '警长PK',
 };
 
-type Tab = 'round' | 'election' | 'all' | 'wolf' | 'private';
+type Tab = 'round' | 'election' | 'all' | 'wolf' | 'private' | 'award';
 
 /** Phone-sized screens (portrait, or a landscape phone): the HUD folds into a bottom dock + sheets. */
 const MOBILE = window.matchMedia('(max-width: 760px), (max-height: 520px)');
@@ -161,6 +163,12 @@ export class GameUI {
   /** The exile's last words are over: waiting for the human to send them off (see confirmExile). */
   private exileWait: (() => void) | null = null;
   private cleanups: (() => void)[] = [];
+  /** 颁奖典礼: who takes part (null = the human), and the AIs' own notes. */
+  private reviewers: { list: (Reviewer | null)[]; notes: () => (string[] | null)[] } | null = null;
+  /** The ceremony has started: its log, and everyone is standing again. */
+  private ceremonyLog: CeremonyEntry[] | null = null;
+  private revived = false;
+  private ceremonyThinking: number | null = null;
 
   constructor(
     private root: HTMLElement,
@@ -853,7 +861,7 @@ export class GameUI {
     if (me.role === 'hunter') chips.push(h('span', { class: `chip ${s.hunterShot ? 'used' : ''}` }, '猎枪 ×1'));
     if (me.role === 'guard' && s.lastGuarded !== null) chips.push(h('span', { class: 'chip' }, `昨夜守护 ${seat(s.lastGuarded)}`));
     if (s.sheriff === this.me) chips.push(h('span', { class: 'chip sheriff' }, '★ 警长'));
-    if (!me.alive) chips.push(h('span', { class: 'chip used' }, '已出局'));
+    if (!me.alive && !this.revived) chips.push(h('span', { class: 'chip used' }, '已出局'));
     items.replaceChildren(...chips);
   }
 
@@ -920,7 +928,7 @@ export class GameUI {
       const row = h(
         'div',
         {
-          class: `roster-row ${p.alive ? '' : 'dead'} ${actor === p.id ? 'acting' : ''} ${this.playerFilter === p.id ? 'selected' : ''}`,
+          class: `roster-row ${p.alive || this.revived ? '' : 'dead'} ${actor === p.id ? 'acting' : ''} ${this.playerFilter === p.id ? 'selected' : ''}`,
           role: 'button',
           tabindex: '0',
           title: '点击只看 TA 的发言；选择目标时点击即可选中',
@@ -957,6 +965,7 @@ export class GameUI {
     tabs.push(['all', '全部']);
     if (me.role === 'werewolf' || this.godView) tabs.push(['wolf', '狼队频道']);
     tabs.push(['private', '私密信息']);
+    if (this.ceremonyLog) tabs.unshift(['award', '颁奖典礼']);
     this.chatTabs.replaceChildren(
       ...tabs.map(([t, label]) =>
         h('button', { class: `tab ${t === 'wolf' ? 'wolf' : ''} ${this.tab === t ? 'active' : ''}`, role: 'tab', onclick: () => { this.tab = t; this.renderTabs(); this.renderChat(); } }, label),
@@ -979,6 +988,8 @@ export class GameUI {
         return e.type === 'wolfChat';
       case 'private':
         return e.visibility.kind === 'private' && e.type !== 'wolfChat';
+      case 'award':
+        return false;
     }
   }
 
@@ -988,6 +999,11 @@ export class GameUI {
       this.chatFilter.append(`只看 ${seat(this.playerFilter)} ${this.game.players[this.playerFilter].name} 的发言 `, h('button', { onclick: () => { this.playerFilter = null; this.renderRoster(); this.renderChat(); } }, '清除'));
     }
     this.chatLog.replaceChildren();
+    if (this.tab === 'award') {
+      for (const e of this.ceremonyLog ?? []) this.appendCeremony(e, false);
+      this.chatLog.scrollTop = this.chatLog.scrollHeight;
+      return;
+    }
     let lastDay = -1;
     for (const e of this.game.events) {
       if (!this.matches(e)) continue;
@@ -1000,27 +1016,41 @@ export class GameUI {
     this.chatLog.scrollTop = this.chatLog.scrollHeight;
   }
 
-  private appendMsg(e: GameEvent, scroll = true) {
+  /** A spoken line: a block in the speaker's bubble colour, name included (same as over their head). */
+  private said(id: number, cls: string, ...rest: (Node | string | null)[]) {
     const P = this.game.players;
+    return h(
+      'div',
+      { class: `msg said ${cls}`, style: bubbleStyle(id) },
+      h('div', { class: 'who' }, h('span', { class: 'n' }, String(id + 1)), P[id].name, id === this.me ? h('span', { class: 'you' }, '（你）') : null, ...rest),
+    );
+  }
+
+  private appendCeremony(e: CeremonyEntry, scroll = true) {
     let el: HTMLElement;
-    // spoken lines are blocks in the speaker's bubble colour, name included (same as over their head)
-    const said = (id: number, cls: string, ...rest: (Node | string | null)[]) =>
-      h(
-        'div',
-        { class: `msg said ${cls}`, style: bubbleStyle(id) },
-        h('div', { class: 'who' }, h('span', { class: 'n' }, String(id + 1)), P[id].name, id === this.me ? h('span', { class: 'you' }, '（你）') : null, ...rest),
-      );
+    if (e.kind === 'note') el = h('div', { class: 'msg gm' }, e.text);
+    else {
+      const fb = e.fallback ? h('span', { class: 'kind fallback', title: '模型调用失败，由规则 AI 代发' }, '规则AI代打') : null;
+      el = this.said(e.id, '', h('span', { class: 'kind' }, e.tag), fb);
+      el.append(h('div', { class: 'text' }, e.text));
+    }
+    this.chatLog.append(el);
+    if (scroll) this.chatLog.scrollTop = this.chatLog.scrollHeight;
+  }
+
+  private appendMsg(e: GameEvent, scroll = true) {
+    let el: HTMLElement;
     switch (e.type) {
       case 'speech': {
         const kind = e.data?.explode ? '自爆' : SPEECH_KIND[e.speechKind ?? 'discussion'];
         const fb = e.data?.fallback ? h('span', { class: 'kind fallback', title: '模型调用失败，由规则 AI 代发' }, '规则AI代打') : null;
-        el = said(e.speaker!, '', kind ? h('span', { class: 'kind' }, kind) : null, fb);
+        el = this.said(e.speaker!, '', kind ? h('span', { class: 'kind' }, kind) : null, fb);
         el.append(h('div', { class: 'text' }, e.text));
         break;
       }
       case 'wolfChat':
         if (e.speaker !== undefined) {
-          el = said(e.speaker, 'wolf', h('span', { class: 'kind' }, '狼队'));
+          el = this.said(e.speaker, 'wolf', h('span', { class: 'kind' }, '狼队'));
           el.append(h('div', { class: 'text' }, e.text));
         } else el = h('div', { class: 'msg wolf' }, e.text);
         break;
@@ -1050,21 +1080,22 @@ export class GameUI {
       const pl = this.game.players[i];
       const k = this.knownOf(i);
       const b = this.bubbles.get(i);
-      const thinking = actor === i && this.held?.speaker !== i;
+      const thinking = (actor === i && this.held?.speaker !== i) || this.ceremonyThinking === i;
       // spelled out while the last speech is still being read, so it's clear who is next
       const thinkingText = this.waitingFor === i ? '正在思考中…' : '...';
       // newest words on top; hovering a bubble brings it to the front (CSS)
       el.style.zIndex = this.raised === i ? '9999' : String(b ? 10 + b.seq : 1);
-      const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? `${b.spot}:${b.text}` : ''}|${thinking && thinkingText}`;
+      const alive = pl.alive || this.revived;
+      const key = `${alive}|${k?.text}|${k?.ring}|${b ? `${b.spot}:${b.text}` : ''}|${thinking && thinkingText}`;
       if (el.dataset.key === key) return;
       el.dataset.key = key;
-      el.className = `label ${pl.alive ? '' : 'dead'} ${i === this.me ? 'me' : ''}`;
+      el.className = `label ${alive ? '' : 'dead'} ${i === this.me ? 'me' : ''}`;
       const parts = [
         b ? h('div', { class: `bubble ${b.spot ? 'spot' : ''}`, style: bubbleStyle(i) }, b.text) : null,
         thinking ? h('div', { class: 'thinking' }, thinkingText) : null,
         k && i !== this.me && !k.ring ? h('div', { class: `role-tag ${k.cls}` }, k.text) : null,
         k?.ring ? h('div', { class: `role-tag ${k.ring}` }, this.godView || this.game.state.phase === 'ended' ? ROLE_NAME[pl.role] : k.ring === 'wolf' ? '狼人' : '好人') : null,
-        h('div', { class: 'plate' }, h('span', { class: `n ${k?.ring ? `ring-${k.ring}` : ''}` }, String(i + 1)), pl.name, pl.alive ? '' : ' ✝'),
+        h('div', { class: 'plate' }, h('span', { class: `n ${k?.ring ? `ring-${k.ring}` : ''}` }, String(i + 1)), pl.name, alive ? '' : ' ✝'),
       ];
       el.replaceChildren(...parts.filter((x): x is HTMLDivElement => x !== null));
     });
@@ -1229,6 +1260,70 @@ export class GameUI {
     return true;
   }
 
+  /** Who takes part in the 颁奖典礼 (the human's own seat is null: they are asked through the panel). */
+  setReviewers(list: (Reviewer | null)[], notes: () => (string[] | null)[]) {
+    this.reviewers = { list, notes };
+  }
+
+  private startCeremony() {
+    if (!this.reviewers || this.ceremonyLog) return;
+    this.ceremonyLog = [];
+    // the results panel no longer offers the ceremony
+    this.endModal?.querySelector('.btn.award')?.remove();
+    this.tab = 'award';
+    this.playerFilter = null;
+    this.bubbles.clear();
+    this.renderTabs();
+    const ceremony = new AwardCeremony({
+      game: this.game,
+      stage: this.stage,
+      me: this.me,
+      reviewers: this.reviewers.list,
+      notes: this.reviewers.notes,
+      log: (e) => {
+        this.ceremonyLog!.push(e);
+        if (this.tab === 'award') this.appendCeremony(e);
+        else if (MOBILE.matches) {
+          this.unread++;
+          this.renderDock();
+        }
+      },
+      bubble: (id, text) => {
+        if (text === null) this.bubbles.delete(id);
+        else this.bubbles.set(id, { text, seq: ++this.bubbleSeq, spot: true });
+      },
+      clearBubbles: () => this.bubbles.clear(),
+      thinking: (id) => (this.ceremonyThinking = id),
+      status: (phase, actor = '') => {
+        this.banner.querySelector('.phase')!.textContent = phase;
+        clearInterval(this.actorTimer);
+        this.actorKey = '';
+        this.banner.querySelector('.actor')!.textContent = actor;
+      },
+      panel: (...children) => {
+        this.action.replaceChildren(...children.filter((c): c is Node | string => c !== null));
+        this.action.classList.add('show');
+      },
+      closePanel: () => this.close(),
+      revive: () => {
+        this.revived = true;
+        this.renderRoster();
+        this.renderItems();
+      },
+      finish: () => {
+        this.action.replaceChildren(
+          h('div', { class: 'title' }, '🎉 颁奖典礼结束'),
+          h('div', { class: 'hint' }, '感谢参与！可以在「颁奖典礼」页回看所有赛后感言和投票明细。'),
+          h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => this.close() }, '继续围观'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
+        );
+        this.action.classList.add('show');
+      },
+      leave: () => this.onRestart(),
+      gone: () => this.destroyed,
+    });
+    void ceremony.run().catch((e) => console.error(e));
+  }
+
   private showEnd(s: GameState) {
     if (this.endShown) return;
     this.endShown = true;
@@ -1258,7 +1353,15 @@ export class GameUI {
           h('div', { class: `winner ${s.winner}` }, s.winner === 'good' ? '好人胜利' : '狼人胜利'),
           h('p', { style: 'text-align:center' }, won ? '你所在的阵营赢得了这座小镇。' : '你所在的阵营输掉了这一局。'),
           h('div', { class: 'reveal' }, ...this.game.players.map((p) => h('div', { class: teamOf(p.role) === 'wolf' ? 'wolf' : '' }, `${seat(p.id)} ${p.name}`, h('br'), `${ROLE_NAME[p.role]}${p.alive ? '' : ' ✝'}`))),
-          h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => { back.remove(); if (MOBILE.matches) this.setSheet('chat'); } }, '回看记录'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
+          h(
+            'div',
+            { class: 'actions' },
+            h('button', { class: 'btn', onclick: () => { back.remove(); if (MOBILE.matches) this.setSheet('chat'); } }, '回看记录'),
+            this.reviewers && !this.ceremonyLog
+              ? h('button', { class: 'btn award', title: '全员复活，赛后测评、投票选出全场最佳与最差', onclick: () => { back.remove(); this.startCeremony(); } }, '🏆 颁奖典礼')
+              : null,
+            h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面'),
+          ),
         ),
       );
       this.endModal = back;

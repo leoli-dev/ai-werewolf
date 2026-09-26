@@ -1,5 +1,6 @@
+import { playScores, scoredVote, type AwardVote, type ReviewContext, type ReviewResult, type Reviewer } from '../game/ceremony';
 import { Rng } from '../game/rng';
-import { EXPLODE_CHOICE, seat, type Agent, type PlayerView, type SpeechRequest, type SpeechResult, type TargetRequest, type WolfChatRequest } from '../game/types';
+import { EXPLODE_CHOICE, ROLE_NAME, seat, type Agent, type PlayerView, type SpeechRequest, type SpeechResult, type TargetRequest, type WolfChatRequest } from '../game/types';
 
 export interface MockSnapshot {
   rng: number;
@@ -10,7 +11,7 @@ export interface MockSnapshot {
  * Offline rule-based agent: no LLM needed. Used for tests and the
  * "离线规则 AI" mode. Plays plausibly but simply.
  */
-export class MockAgent implements Agent {
+export class MockAgent implements Agent, Reviewer {
   private rng: Rng;
   private suspicion = new Map<number, number>();
 
@@ -98,6 +99,16 @@ export class MockAgent implements Agent {
     return this.rng.pick(lines);
   }
 
+  async review(ctx: ReviewContext): Promise<ReviewResult> {
+    await this.wait();
+    return mockReview(ctx, this.rng);
+  }
+
+  async awardVote(ctx: ReviewContext): Promise<AwardVote> {
+    await this.wait();
+    return scoredVote(ctx, () => this.rng.next());
+  }
+
   async choose(req: TargetRequest, v: PlayerView): Promise<number | null> {
     await this.wait();
     const c = req.candidates;
@@ -157,6 +168,20 @@ export class MockAgent implements Agent {
     }
     return null;
   }
+}
+
+/** The post-game remarks of the rule AI: praise the best-scoring seat, rib the worst. */
+function mockReview(ctx: ReviewContext, rng: Rng): string {
+  const vote = scoredVote(ctx, () => rng.next());
+  const me = ctx.players[ctx.self];
+  const role = (id: number) => ROLE_NAME[ctx.players[id].role];
+  const won = ctx.winner !== null && (me.role === 'werewolf') === (ctx.winner === 'wolf');
+  const self = playScores(ctx)[ctx.self] > 0 ? '我自己这局还算对得起这个身份' : '我自己这局打得不太行，回去再练练';
+  return rng.pick([
+    `${won ? '赢了真开心！' : '输了有点可惜。'}这局我最佩服${seat(vote.best)}，${role(vote.best)}打得很到位；${seat(vote.worst)}这个${role(vote.worst)}就有点拉胯了。${self}。`,
+    `复盘一下：${seat(vote.best)}（${role(vote.best)}）是全场 MVP，关键操作都做对了。${seat(vote.worst)}（${role(vote.worst)}）失误太多，下局加油。${self}。`,
+    `我是${role(ctx.self)}。要我说，${seat(vote.best)}打得最好，${seat(vote.worst)}打得最差，没什么好争的。`,
+  ]);
 }
 
 /** Has `id` claimed seer in a public speech? */

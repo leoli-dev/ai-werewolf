@@ -5,7 +5,9 @@ const NOTE_TAG: Record<TargetAction, string> = {
   vote: '投票', revote: 'PK再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', witchSave: '救', witchPoison: '毒',
   runForSheriff: '上警', withdraw: '退水', sheriffVote: '警长投票', sheriffRevote: '警长PK再投', badge: '移交警徽', speakOrder: '发言顺序从',
 };
+import type { AwardVote, ReviewContext, ReviewResult, Reviewer } from '../game/ceremony';
 import { MockAgent, type MockSnapshot } from './mockAgent';
+import { REVIEW_TASK, awardVoteTask, parseAwardVote, reviewSystemPrompt, reviewUserPrompt } from './review';
 import { cleanSpeech, parseExplode, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
 import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
 
@@ -32,7 +34,7 @@ export interface LLMSnapshot {
  * role/system prompt + 共享发言记录本 (public events) + 角色私本 (private
  * events + its own notes). All calls go through one SerialQueue.
  */
-export class LLMAgent implements Agent {
+export class LLMAgent implements Agent, Reviewer {
   /** Private notes: the reasons behind its own night actions / votes. */
   readonly notes: string[] = [];
   private fallback: MockAgent;
@@ -117,6 +119,51 @@ export class LLMAgent implements Agent {
         const r = await this.fallback.speak(req, view);
         return typeof r === 'string' ? { text: r, fallback: true } : { ...r, fallback: true };
       }
+    }
+  }
+
+  // ── 颁奖典礼 (post-game) ──
+
+  private reviewMessages(ctx: ReviewContext, task: string): ChatMessage[] {
+    return [
+      { role: 'system', content: reviewSystemPrompt(ctx, this.persona) },
+      { role: 'user', content: reviewUserPrompt(ctx, task) },
+    ];
+  }
+
+  async review(ctx: ReviewContext): Promise<ReviewResult> {
+    while (true) {
+      try {
+        const raw = await this.call('review', this.reviewMessages(ctx, REVIEW_TASK), 2000, undefined, SPEECH_TEMPERATURE);
+        return cleanSpeech(raw, { self: { id: this.id } }, this.persona.name);
+      } catch (e) {
+        if (await this.shouldRetry('review', (e as Error).message)) continue;
+        const r = await this.fallback.review(ctx);
+        return { text: typeof r === 'string' ? r : r.text, fallback: true };
+      }
+    }
+  }
+
+  async awardVote(ctx: ReviewContext): Promise<AwardVote> {
+    while (true) {
+      try {
+        const msgs = this.reviewMessages(ctx, awardVoteTask(ctx));
+        let raw = await this.call('awardVote', msgs, 1000, this.provider.config.decisionReasoning);
+        let vote = parseAwardVote(raw, ctx.self, ctx.players.length);
+        if (!vote) {
+          msgs.push(
+            { role: 'assistant', content: raw },
+            { role: 'user', content: '这个投票无效：best 和 worst 必须是两个不同的号码，且不能是你自己。请重新只输出一行 JSON：{"best": 号码, "worst": 号码, "reason": "30字以内的理由"}' },
+          );
+          raw = await this.call('awardVote', msgs, 1000, this.provider.config.decisionReasoning);
+          vote = parseAwardVote(raw, ctx.self, ctx.players.length);
+        }
+        if (vote) return vote;
+        if (await this.shouldRetry('awardVote', `模型给出的投票无法解析：${raw.slice(0, 80)}`)) continue;
+      } catch (e) {
+        if (await this.shouldRetry('awardVote', (e as Error).message)) continue;
+      }
+      return { ...(await this.fallback.awardVote(ctx)), fallback: true };
     }
   }
 

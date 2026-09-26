@@ -241,6 +241,11 @@ export class Game {
     return this.players.filter((p) => p.role === 'werewolf');
   }
 
+  /** How everyone who is out went out (god view: for the post-game ceremony). */
+  deathCauses(): Record<number, DeathCause> {
+    return Object.fromEntries(this.causes);
+  }
+
   /**
    * 屠边: wolves win once every god (神职) or every villager is out. Good wins only
    * once every wolf is out. Both at once (the same night) goes to the wolves (狼刀在先).
