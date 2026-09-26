@@ -45,7 +45,7 @@ export type KeySource = (provider: ProviderId) => Promise<string | null>;
 /** A key only ever goes to its own provider's official address (the local server: anywhere). */
 export function keyMayGoTo(provider: ProviderId, baseUrl: string): boolean {
   const preset = PROVIDERS[provider];
-  if (preset.editableUrl) return true;
+  if (preset.fromEnv) return true;
   try {
     return new URL(baseUrl).origin === new URL(preset.baseUrl).origin;
   } catch {

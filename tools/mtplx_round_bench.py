@@ -23,7 +23,8 @@ def load_env():
 
 ENV = load_env()
 BASE = ENV["LLM_BASE_URL"].rstrip("/") + "/chat/completions"
-MODEL = ENV["LLM_MODEL"]
+# LLM_MODELS is a comma-separated list; the first entry is the default (LLM_MODEL: older .env files)
+MODEL = [m.strip() for m in (ENV.get("LLM_MODELS") or ENV.get("LLM_MODEL", "")).split(",") if m.strip()][0]
 API_KEY = ENV.get("LLM_API_KEY", "")
 REASONING = ENV.get("LLM_REASONING", "medium")
 

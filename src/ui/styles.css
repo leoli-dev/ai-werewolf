@@ -249,7 +249,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .seg .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
 .seg .dot.ok { background: var(--good); }
 .fixed-url { font-family: ui-monospace, monospace; font-size: 13px; color: var(--ink); }
-.form input.port { width: 88px; flex: none; }
 .engine-cfg .inline input[type="text"] { flex: 1; }
 .key-row .key-saved { font-family: ui-monospace, monospace; font-size: 13px; color: var(--good); }
 .vault-row { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--edge); font-size: 13px; gap: 8px; flex-wrap: wrap; }

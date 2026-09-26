@@ -52,6 +52,7 @@ export default defineConfig(({ mode }) => {
   // non-secret settings for the browser; the API key stays on the server
   const browserEnv = {
     LLM_BASE_URL: env.LLM_BASE_URL ?? '',
+    LLM_MODELS: env.LLM_MODELS ?? '',
     LLM_MODEL: env.LLM_MODEL ?? '',
     LLM_REASONING: env.LLM_REASONING ?? '',
     LLM_DECISION_REASONING: env.LLM_DECISION_REASONING ?? '',
