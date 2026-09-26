@@ -57,7 +57,6 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
     mode.onchange = () => updateConfig({ mode: mode.value as 'llm' | 'offline' });
     const engine = h('div', { class: 'engine-cfg' });
     const result = h('div', { class: 'test-result', 'aria-live': 'polite' });
-    let served: string[] = [];
 
     const renderEngine = () => {
       if (shownMode() !== 'llm') return engine.replaceChildren();
@@ -81,7 +80,7 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
               class: `btn ${pid === id ? 'on' : ''}`,
               disabled: !providerAvailable(pid),
               title: providerAvailable(pid) ? null : '网页版无法访问本机模型服务，请在本地运行游戏后使用',
-              onclick: () => { result.textContent = ''; served = []; setActiveProvider(pid); },
+              onclick: () => { result.textContent = ''; setActiveProvider(pid); },
             },
             PROVIDERS[pid].label,
             PROVIDERS[pid].needsKey ? h('span', { class: `dot ${hints[pid] ? 'ok' : ''}`, title: hints[pid] ? '已保存 Key' : '未设置 Key' }) : null,
@@ -89,42 +88,25 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         ),
       );
 
-      // address: fixed for the official APIs; URL + port for the local server
-      let address: HTMLElement;
-      if (preset.editableUrl) {
-        const url = h('input', { type: 'text', value: p.baseUrl, 'aria-label': 'Base URL', spellcheck: 'false' }) as HTMLInputElement;
-        let port = '';
-        try {
-          const u = new URL(p.baseUrl);
-          port = u.port || (u.protocol === 'https:' ? '443' : '80');
-        } catch {
-          /* not a valid URL yet */
-        }
-        const portIn = h('input', { type: 'number', min: '1', max: '65535', value: port, 'aria-label': '端口', class: 'port' }) as HTMLInputElement;
-        url.onchange = () => updateProfile(id, { baseUrl: url.value.trim().replace(/\/+$/, '') });
-        portIn.onchange = () => {
-          try {
-            const u = new URL(url.value.trim());
-            u.port = portIn.value;
-            updateProfile(id, { baseUrl: u.toString().replace(/\/+$/, '') });
-          } catch {
-            result.className = 'test-result err';
-            result.textContent = '先填一个有效的地址，例如 http://127.0.0.1:8001/v1';
-          }
-        };
-        address = h('div', { class: 'inline' }, url, h('span', { class: 'sub' }, '端口'), portIn);
-      } else address = h('div', { class: 'fixed-url' }, p.baseUrl, hintText(' 官方地址'));
+      // address: the official one, or the local server's from .env (not editable here)
+      const envCfg = envProvider();
+      const address = preset.fromEnv
+        ? h('div', { class: 'stack' }, h('div', { class: 'fixed-url' }, p.baseUrl || '（未配置）'), hintText('来自 .env 的 LLM_BASE_URL（含端口），游戏里不能改；改 .env 后刷新页面'))
+        : h('div', { class: 'fixed-url' }, p.baseUrl, hintText(' 官方地址'));
 
-      // model: the official list, or free text + what the local server reports
+      // model: pick from a fixed list — the official one, or .env LLM_MODELS for the local server
       let model: HTMLElement;
-      if (preset.models.length) {
+      if (preset.fromEnv) {
+        if (!envCfg.models.length) model = h('p', { class: 'test-result err', style: 'margin:0' }, '.env 里没有配置模型：在 LLM_MODELS 填模型 id（多个用逗号分隔），然后刷新页面');
+        else {
+          const sel = h('select', { 'aria-label': '模型' }, ...envCfg.models.map((m, i) => h('option', { value: m, selected: m === p.model }, i === 0 ? `${m}（默认）` : m))) as HTMLSelectElement;
+          sel.onchange = () => { result.textContent = ''; updateProfile(id, { model: sel.value }); };
+          model = h('div', { class: 'stack' }, sel, hintText('列表来自 .env 的 LLM_MODELS（逗号分隔，第一个为默认）；要增删模型请改 .env 后刷新页面'));
+        }
+      } else {
         const sel = h('select', { 'aria-label': '模型' }, ...preset.models.map((m) => h('option', { value: m.id, selected: m.id === p.model }, `${m.id} — ${m.note}`))) as HTMLSelectElement;
         sel.onchange = () => updateProfile(id, { model: sel.value });
         model = h('div', { class: 'stack' }, sel, hintText('价格：每百万 token 输入 / 输出（美元）'));
-      } else {
-        const inp = h('input', { type: 'text', value: p.model, list: 'model-list', 'aria-label': '模型', spellcheck: 'false' }) as HTMLInputElement;
-        inp.onchange = () => updateProfile(id, { model: inp.value.trim() });
-        model = h('div', {}, inp, h('datalist', { id: 'model-list' }, ...served.map((m) => h('option', { value: m }))));
       }
 
       // reasoning: only the values this model officially accepts
@@ -139,13 +121,12 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
 
       // key: stored encrypted; only its last 4 characters are ever shown
       const hint = hints[id];
-      const env = envProvider();
       const keyRow = h(
         'div',
         { class: 'inline key-row' },
         hint
           ? h('span', { class: 'key-saved' }, `已加密保存 ${hint}`)
-          : h('span', { class: 'sub' }, preset.needsKey ? '未设置' : env.keyOnServer ? '使用 .env 的 LLM_API_KEY（开发服务器注入）' : '可选，本地服务一般不需要'),
+          : h('span', { class: 'sub' }, preset.needsKey ? '未设置' : envCfg.keyOnServer ? '使用 .env 的 LLM_API_KEY（开发服务器注入）' : '可选，本地服务一般不需要'),
         h('button', { class: 'btn', type: 'button', onclick: () => void promptSetKey(root, id) }, hint ? '替换' : '设置'),
         hint ? h('button', { class: 'btn danger', type: 'button', onclick: () => confirm(`删除已保存的 ${preset.label} API Key？`) && vault.removeKey(id) }, '删除') : null,
       );
@@ -178,7 +159,7 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
           'div',
           { class: 'inline', style: 'margin-top:10px;gap:8px;flex-wrap:wrap' },
           testBtn,
-          preset.editableUrl ? h('button', { class: 'btn', type: 'button', onclick: () => updateProfile(id, localDefaults()) }, '恢复 .env 默认') : null,
+          preset.fromEnv ? h('button', { class: 'btn', type: 'button', onclick: () => updateProfile(id, localDefaults()) }, '恢复 .env 默认') : null,
           opts.inGame ? hintText('对局中切换后，下一次 AI 调用就会使用新设置') : null,
         ),
         result,
@@ -208,24 +189,20 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
       result.className = 'test-result';
       result.textContent = '连接中…（本地推理首个请求可能较慢）';
       const provider = new OpenAICompatibleProvider(p, (id) => vault.getKey(id));
-      let switched = '';
-      if (PROVIDERS[p.provider].editableUrl) {
+      let served: string[] = [];
+      if (PROVIDERS[p.provider].fromEnv) {
         try {
           served = await provider.listModels();
-          // the server serves exactly one model and it isn't the one typed in: switch to it
-          if (served.length === 1 && served[0] !== p.model) {
-            switched = `服务端没有「${p.model}」，已改用「${served[0]}」。`;
-            updateProfile(p.provider, { model: served[0] });
-            provider.config = resolveProvider();
-          }
         } catch {
           /* test() below reports connection problems */
         }
       }
       const r = await provider.test();
       renderEngine();
-      result.className = `test-result ${r.ok ? 'ok' : 'err'}`;
-      result.textContent = (r.ok ? '✓ ' : '✗ ') + r.message + (switched ? ` ${switched}` : '') + (PROVIDERS[p.provider].editableUrl && served.length ? `（可用模型：${served.join('、')}）` : '');
+      // the model list is .env's: only point out a mismatch, never switch on our own
+      const unlisted = served.length && !served.includes(p.model) ? ` 服务端没有列出「${p.model}」（它提供：${served.join('、')}），请检查 .env 的 LLM_MODELS。` : '';
+      result.className = `test-result ${r.ok && !unlisted ? 'ok' : 'err'}`;
+      result.textContent = (!r.ok ? '✗ ' : unlisted ? '⚠ ' : '✓ ') + r.message + unlisted;
       btn.disabled = false;
     };
 
@@ -269,7 +246,7 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         h('label', {}, 'AI 发言'), h('label', { class: 'check' }, stepSpeech, '白天逐条查看：点「下一位发言」才出现下一段'),
       ),
       h('h2', {}, 'AI 引擎'),
-      env.missing.length ? h('p', { class: 'test-result err' }, `.env 缺少 ${env.missing.join('、')}（参考 .env.example）：本地 LLM 的默认地址/模型可能为空。`) : null,
+      env.missing.length ? h('p', { class: 'test-result err' }, `.env 缺少 ${env.missing.join('、')}（参考 .env.example）：「本地 LLM」的地址 / 模型列表为空。`) : null,
       h(
         'div',
         { class: 'form' },

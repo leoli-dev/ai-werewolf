@@ -36,13 +36,16 @@ export interface ProviderPreset {
   label: string;
   dialect: Dialect;
   baseUrl: string;
-  /** Only the local server's address can be changed. */
-  editableUrl: boolean;
+  /**
+   * The local server: address and model list come from `.env` (LLM_BASE_URL /
+   * LLM_MODELS), not from this preset; the game only picks from that list.
+   */
+  fromEnv: boolean;
   /** Official APIs need a key; a local server usually does not. */
   needsKey: boolean;
   /** Where to get a key. */
   keyUrl?: string;
-  /** Fixed list (official APIs); a local server lists its own via GET /models. */
+  /** Fixed list (official APIs); the local server's list is `.env` LLM_MODELS. */
   models: ModelSpec[];
   /** Model picked when this provider is first chosen. */
   defaultModel: string;
@@ -59,7 +62,7 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     label: 'OpenAI',
     dialect: 'openai',
     baseUrl: 'https://api.openai.com/v1',
-    editableUrl: false,
+    fromEnv: false,
     needsKey: true,
     keyUrl: 'https://platform.openai.com/api-keys',
     models: [
@@ -83,7 +86,7 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     label: 'DeepSeek',
     dialect: 'deepseek',
     baseUrl: 'https://api.deepseek.com',
-    editableUrl: false,
+    fromEnv: false,
     needsKey: true,
     keyUrl: 'https://platform.deepseek.com/api_keys',
     models: [
@@ -99,7 +102,7 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     label: '本地 LLM',
     dialect: 'local',
     baseUrl: 'http://127.0.0.1:8001/v1',
-    editableUrl: true,
+    fromEnv: true,
     needsKey: false,
     models: [],
     defaultModel: '',

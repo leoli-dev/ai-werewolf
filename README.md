@@ -44,19 +44,20 @@ npm run build      # 静态产物输出到 dist/
 
 ### 本地 LLM 配置（`.env`）
 
-「本地 LLM」这一项的默认值放在项目根目录的 `.env`，游戏、开发服务器代理、`tools/llm_selfplay.ts`、`tools/mtplx_round_bench.py` 都从这里读取。
+「本地 LLM」的**地址和模型列表只来自**项目根目录的 `.env`，游戏、开发服务器代理、`tools/llm_selfplay.ts`、`tools/mtplx_round_bench.py` 都从这里读取。
+游戏的配置面板里，地址（含端口）只显示、不能修改；模型是一个下拉列表，只能从 `LLM_MODELS` 里选，不能手动输入。要换服务器或增删模型，请改 `.env`。
 `.env` 不进 git；首次 `npm run dev` 时若没有 `.env` 会自动从 `.env.example` 复制一份。OpenAI / DeepSeek 的 Key 在游戏里设置，不放这里。
 
 | 变量 | 说明 |
 |---|---|
-| `LLM_BASE_URL` | OpenAI 兼容地址，默认本地 MTPLX `http://127.0.0.1:8001/v1` |
-| `LLM_MODEL` | 模型 id（`GET /v1/models` 列出的名字） |
+| `LLM_BASE_URL` | OpenAI 兼容地址（含端口），默认本地 MTPLX `http://127.0.0.1:8001/v1`；游戏只用这一个地址 |
+| `LLM_MODELS` | 游戏里可选的模型 id，逗号分隔（`GET /v1/models` 列出的名字），第一个为默认，脚本也用它。例：`LLM_MODELS=qwen3-27b,qwen3-8b`。旧的单个 `LLM_MODEL=…` 仍然可用 |
 | `LLM_API_KEY` | 可选；只留在开发服务器，由代理加到请求头，不会打包进浏览器代码 |
-| `LLM_REASONING` / `LLM_DECISION_REASONING` | 发言 / 投票·夜间技能·狼队沟通的推理强度：none·low·medium·high |
+| `LLM_REASONING` / `LLM_DECISION_REASONING` | 发言 / 投票·夜间技能·狼队沟通的默认推理强度：none·low·medium·high（游戏里可调） |
 | `LLM_USE_PROXY` | 浏览器经 Vite 开发服务器转发（本地服务拒绝跨域时需要；静态构建里无效） |
 | `LLM_TIMEOUT_MS` | 单次请求超时 |
 
-改完 `.env` 后 Vite 会自动重启，刷新页面生效。
+改完 `.env` 后 Vite 会自动重启，刷新页面生效。「测试连接」会对照服务端 `GET /v1/models` 的结果，所选模型不在其中时给出提示（不会自动改选）。
 
 ## 部署到 GitHub Pages
 

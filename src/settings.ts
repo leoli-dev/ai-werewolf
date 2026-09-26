@@ -8,7 +8,8 @@ import type { Role } from './game/types';
  * apply at once — also to a game in progress — and are announced to listeners.
  *
  * Everything persists in the browser except API keys, which live encrypted in
- * the key vault (see keyVault.ts). The local server's defaults come from `.env`.
+ * the key vault (see keyVault.ts). The local server's address and model list
+ * come from `.env` only: the panel picks a model from that list, nothing else.
  */
 export interface AudioLevels {
   muted: boolean;
@@ -20,7 +21,7 @@ export interface AudioLevels {
 
 /** One provider's saved choices (the matrix keeps one per provider). */
 export interface LlmProfile {
-  /** Fixed for the official APIs; editable for the local server. */
+  /** Fixed: the official address, or `.env` LLM_BASE_URL for the local server. */
   baseUrl: string;
   model: string;
   reasoning: string;
@@ -82,14 +83,19 @@ function defaultProfile(id: ProviderId): LlmProfile {
   return { baseUrl: preset.baseUrl, model: preset.defaultModel, ...preset.suggested, useProxy: true };
 }
 
+/** The models a provider may use: its official list, or `.env` LLM_MODELS for the local server. */
+export function modelIds(id: ProviderId): string[] {
+  return PROVIDERS[id].fromEnv ? envProvider().models : PROVIDERS[id].models.map((m) => m.id);
+}
+
 /** A profile that only holds values its provider accepts. */
 function sane(id: ProviderId, p: Partial<LlmProfile>): LlmProfile {
   const d = defaultProfile(id);
-  const preset = PROVIDERS[id];
-  const model = preset.models.length && !preset.models.some((m) => m.id === p.model) ? d.model : (p.model ?? d.model);
+  // a model no longer listed (e.g. removed from .env) falls back to the default
+  const model = p.model && modelIds(id).includes(p.model) ? p.model : d.model;
   const efforts = effortsFor(id, model);
   return {
-    baseUrl: preset.editableUrl ? (p.baseUrl ?? d.baseUrl) : preset.baseUrl,
+    baseUrl: d.baseUrl,
     model,
     reasoning: clampEffort(p.reasoning ?? d.reasoning, efforts),
     decisionReasoning: clampEffort(p.decisionReasoning ?? d.decisionReasoning, efforts),
