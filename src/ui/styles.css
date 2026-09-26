@@ -144,6 +144,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 #action .award-result { display: flex; flex-direction: column; gap: 6px; font-size: 16px; font-weight: 900; }
 #action .award-result .best { color: var(--gold); }
 #action .award-result .worst { color: #c89a6a; }
+#action .btn.poop { display: block; width: 100%; min-height: 64px; font-size: 26px; font-weight: 900; background: #6b4423; border-color: #c89a6a; color: #fff1d0; touch-action: manipulation; user-select: none; }
+#action .btn.poop:hover:not(:disabled) { background: #7d5230; }
+#action .btn.poop.bump { animation: poop-bump 0.18s ease-out; }
+@keyframes poop-bump { 40% { transform: scale(0.94); } 100% { transform: scale(1); } }
 .btn.award { background: #6a5010; border-color: var(--gold); color: #fff1d0; }
 .btn.award:hover:not(:disabled) { background: #806018; }
 .veil { position: fixed; inset: 0; z-index: 100; background: #fffaf0; opacity: 0; pointer-events: none; transition: opacity 0.9s ease; }

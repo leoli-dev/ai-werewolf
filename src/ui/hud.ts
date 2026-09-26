@@ -1318,6 +1318,7 @@ export class GameUI {
         );
         this.action.classList.add('show');
       },
+      leave: () => this.onRestart(),
       gone: () => this.destroyed,
     });
     void ceremony.run().catch((e) => console.error(e));

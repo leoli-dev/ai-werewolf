@@ -1198,7 +1198,7 @@ export class Stage {
   }
 
   /** Throw `ch` from `a` at `aim` with a little wind-up lunge towards it. */
-  private async lob(a: Actor, gen: number, ch: string, aim: THREE.Vector3, land: (at: THREE.Vector3) => void) {
+  private async lob(a: Actor, gen: number, ch: string, aim: THREE.Vector3, land: (at: THREE.Vector3) => void, size = 1) {
     const p0 = a.sprite.position.clone();
     const dir = aim.clone().sub(p0).setY(0).normalize().multiplyScalar(0.3);
     await this.tween(0.22, (k) => {
@@ -1208,7 +1208,7 @@ export class Stage {
     });
     if (a.gen !== gen) return;
     const from = a.sprite.position.clone().setY(1.3);
-    this.podium.throw(ch, from, aim, { dur: 0.55 + Math.random() * 0.3, arc: 1.2 + Math.random() * 1.6, size: ch === '💩' ? 0.6 : 0.45, land });
+    this.podium.throw(ch, from, aim, { dur: 0.55 + Math.random() * 0.3, arc: 1.2 + Math.random() * 1.6, size: (ch === '💩' ? 0.6 : 0.45) * size, land });
   }
 
   /**
@@ -1263,11 +1263,15 @@ export class Stage {
     if (epoch !== this.epoch) return;
   }
 
+  /** The poop storm under way: who is on the podium, and each thrower's command (for the human's own throws). */
+  private storm: { targets: Actor[]; live: () => boolean; ready: Map<number, number> } | null = null;
+
   /**
    * Everyone else gathers round the podium in a ring and pelts the losers with
-   * 💩, hopping and jeering — until the next game. Resolves once the ring has formed.
+   * 💩, hopping and jeering — until the next game. `manual` (the human's seat)
+   * only throws when told to (`throwPoop`). Resolves once the ring has formed.
    */
-  async poopStorm(worst: number[]): Promise<void> {
+  async poopStorm(worst: number[], manual: number | null = null): Promise<void> {
     const epoch = this.epoch;
     const run = ++this.awardRun;
     const live = () => epoch === this.epoch && run === this.awardRun;
@@ -1275,7 +1279,8 @@ export class Stage {
     const throwers = this.actors.filter((a) => !worst.includes(a.id));
     const rx = Math.max(3.6, this.podium.width / 2 + 1.5);
     const rz = 3.2;
-    const targets = worst.map((id) => this.actors[id]);
+    const storm = { targets: worst.map((id) => this.actors[id]), live, ready: new Map<number, number>() };
+    this.storm = storm;
     const arrived = throwers.map(async (a, k) => {
       const gen = ++a.gen;
       this.cheering.delete(a.id);
@@ -1285,30 +1290,46 @@ export class Stage {
       await this.wait(Math.random() * 0.8);
       if (!(await this.walkTo(a, gen, spot, 3.4)) || !live()) return;
       this.cheering.add(a.id);
+      storm.ready.set(a.id, gen);
+      if (a.id === manual) return;
       void (async () => {
         while (live() && a.gen === gen) {
           await this.wait(0.2 + Math.random() * 0.7);
-          if (!live()) return;
-          const v = targets[Math.floor(Math.random() * targets.length)];
-          const stand = v.sprite.position.clone();
-          // half of it hits them, the rest splats on the carpet round their feet
-          const aim = Math.random() < 0.5
-            ? stand.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.7, 0.35 + Math.random() * 1.3, 0.2))
-            : stand.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.6, 0.12, (Math.random() - 0.5) * 1.6));
-          await this.lob(a, gen, '💩', aim, (at) => {
-            if (!live()) return;
-            this.podium.place('💩', at, 0.32 + Math.random() * 0.12);
-            this.sounds?.splat(this.falloff(at) * 0.8);
-            // the one hit flinches
-            void this.tween(0.25, (k) => {
-              if (!live()) return;
-              v.sprite.position.x = stand.x + Math.sin(k * Math.PI * 4) * 0.08;
-            });
-          });
+          if (live()) await this.pelt(a, gen);
         }
       })();
     });
     await Promise.all(arrived);
+  }
+
+  /** The human throws one 💩 from `id`'s place in the ring; false if they are not in the ring (yet). */
+  throwPoop(id: number): boolean {
+    const st = this.storm;
+    const gen = st?.ready.get(id);
+    if (!st || gen === undefined || !st.live() || this.actors[id].gen !== gen) return false;
+    void this.pelt(this.actors[id], gen, 1.25);
+    return true;
+  }
+
+  /** One 💩 from `a` at someone on the podium: half hit them, the rest splat on the carpet round their feet. */
+  private async pelt(a: Actor, gen: number, size = 1) {
+    const st = this.storm!;
+    const live = st.live;
+    const v = st.targets[Math.floor(Math.random() * st.targets.length)];
+    const stand = v.sprite.position.clone();
+    const aim = Math.random() < 0.5
+      ? stand.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.7, 0.35 + Math.random() * 1.3, 0.2))
+      : stand.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.6, 0.12, (Math.random() - 0.5) * 1.6));
+    await this.lob(a, gen, '💩', aim, (at) => {
+      if (!live()) return;
+      this.podium.place('💩', at, (0.32 + Math.random() * 0.12) * size);
+      this.sounds?.splat(this.falloff(at) * 0.8 * size);
+      // the one hit flinches
+      void this.tween(0.25, (k) => {
+        if (!live()) return;
+        v.sprite.position.x = stand.x + Math.sin(k * Math.PI * 4) * 0.08;
+      });
+    }, size);
   }
 
   /** Awards: the crowd hops and claps on the spot, facing the podium. */
@@ -1339,6 +1360,7 @@ export class Stage {
     this.podium.clear();
     this.cheering.clear();
     this.bouquets = [];
+    this.storm = null;
     this.awardRun++;
     for (const a of this.actors) {
       a.status = 'alive';

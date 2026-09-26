@@ -30,6 +30,8 @@ export interface CeremonyHost {
   revive(): void;
   /** The ceremony is over: offer the way back to the title. */
   finish(): void;
+  /** Back to the title screen. */
+  leave(): void;
   /** The game screen is gone (back at the title). */
   gone(): boolean;
 }
@@ -145,10 +147,16 @@ export class AwardCeremony {
     if (this.dead) return;
     await sleep(1200);
     if (this.dead) return;
-    const storm = stage.poopStorm(tally.worst);
+    // the human joins in by hand, unless they are the one up there
+    const thrower = tally.worst.includes(host.me) ? null : host.me;
+    const storm = stage.poopStorm(tally.worst, thrower);
     void this.heckle(tally.worst);
     await storm;
     if (this.dead) return;
+    if (thrower !== null) {
+      this.throwPanel(thrower, names(tally.worst));
+      return;
+    }
     await sleep(6000);
     if (!this.dead) host.finish();
   }
@@ -278,6 +286,42 @@ export class AwardCeremony {
         h('div', { class: 'best' }, '🏆 全场最佳：', who(t.best) || '无'),
         h('div', { class: 'worst' }, '💩 全场最差：', who(t.worst) || '无'),
       ),
+    );
+  }
+
+  /** The human's own 💩 button (and Space / Enter), with a running count. */
+  private throwPanel(me: number, losers: string) {
+    let thrown = 0;
+    let last = 0;
+    const count = h('span', { class: 'count' }, '还没扔');
+    const fire = () => {
+      if (this.dead) return;
+      // a mad clicker still gets a throw about every tenth of a second
+      const now = performance.now();
+      if (now - last < 110 || !this.host.stage.throwPoop(me)) return;
+      last = now;
+      thrown++;
+      count.textContent = `你已经扔了 ${thrown} 坨`;
+      if (thrown % 5 === 1) this.host.bubble(me, ['看招！💩', '接着！', '吃我一坨！', '让你划水！'][Math.floor(thrown / 5) % 4]);
+      btn.classList.remove('bump');
+      void btn.offsetWidth; // restart the bump animation
+      btn.classList.add('bump');
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (this.dead) return document.removeEventListener('keydown', onKey);
+      if (![' ', 'Enter'].includes(e.key)) return;
+      if ((e.target as HTMLElement).closest?.('input, textarea, select, .modal-back')) return;
+      e.preventDefault();
+      fire();
+    };
+    document.addEventListener('keydown', onKey);
+    const btn = h('button', { class: 'btn poop', onclick: fire }, '💩 扔！') as HTMLButtonElement;
+    audio.chime();
+    this.host.panel(
+      h('div', { class: 'title' }, '💩 轮到你了！'),
+      h('div', { class: 'hint' }, `狠狠地砸向台上的 ${losers}！点按钮或按空格 / 回车扔，想扔多少扔多少。`),
+      btn,
+      h('div', { class: 'row' }, count, h('button', { class: 'btn primary', onclick: () => this.host.leave() }, '回到标题画面')),
     );
   }
 
