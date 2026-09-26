@@ -260,7 +260,8 @@ export function speechTask(req: SpeechRequest | WolfChatRequest, view: PlayerVie
           : '如果刀口和打法已经一致，只回复：pass。';
     return `现在是第 ${req.day} 夜，狼队秘密频道第 ${req.round}/${req.rounds} 轮沟通（只有狼人能看到）。
 ${aliveList(view)}${heard}
-${task}`;
+${task}
+这是和队友说话，不是投票：用口语直接说出你的话，不要输出 JSON 或 {"vote"/"target"…} 之类的格式。刀人投票在沟通结束后单独进行。`;
   }
   const what = {
     discussion: '现在轮到你白天发言。分析局势，给出你的怀疑对象和理由，也可以根据策略表明（或伪装）身份。',
@@ -433,9 +434,45 @@ export function parseExplode(text: string): { text: string; explode: boolean } {
   return m ? { text: text.slice(m[0].length), explode: true } : { text, explode: false };
 }
 
+/** Keys a model uses for the spoken line when it wraps a speech in JSON anyway. */
+const SPOKEN_KEYS = ['speech', 'text', 'content', 'say', 'message', 'msg', '发言', '台词'];
+const PICK_KEYS = ['target', 'vote', 'kill', '刀口', '目标'];
+
+/**
+ * A model that answers a speech / wolf-chat turn with a decision-style JSON
+ * ({"vote": "12号", "reason": "…"}), sometimes in a ```json fence: turn it back
+ * into a plain line instead of showing raw JSON in the chat.
+ */
+export function unwrapJsonSpeech(text: string): string {
+  const s = text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+  // also catch output cut off by the token cap before the closing brace
+  if (!/^\{\s*"/.test(s)) return text;
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(s);
+  } catch {
+    // not valid JSON: salvage the quoted string values
+    const vals = [...s.matchAll(/"[^"]*"\s*[:：]\s*"([^"]*)(?:"|$)/g)].map((m) => m[1].trim()).filter(Boolean);
+    return vals.length ? vals.join('。') : text;
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return text;
+  const str = (k: string) => (obj[k] == null ? '' : String(obj[k]).trim());
+  const spoken = SPOKEN_KEYS.map(str).find(Boolean);
+  if (spoken) return spoken;
+  const reason = str('reason') || str('理由');
+  const pick = PICK_KEYS.map(str).find(Boolean);
+  if (pick) {
+    const n = pick.match(/\d{1,2}/)?.[0];
+    const said = n ? `${n}号` : pick;
+    if (!reason) return /^0$/.test(pick) ? '过' : `我选${said}。`;
+    return n && reason.includes(n) ? reason : `我选${said}。${reason}`;
+  }
+  return reason || Object.values(obj).filter((v) => typeof v === 'string').join('。') || text;
+}
+
 /** Trim quotes / "3号艾德：" prefixes a model sometimes adds to speeches. */
 export function cleanSpeech(text: string, view: PlayerView, personaName: string): string {
-  let s = text.trim();
+  let s = unwrapJsonSpeech(text).trim();
   const head = s.slice(0, 20);
   const colon = head.search(/[：:]/);
   if (colon > 0 && (head.slice(0, colon).includes(seat(view.self.id)) || head.slice(0, colon).includes(personaName))) {

@@ -47,6 +47,12 @@ describe('cleanSpeech', () => {
     expect(cleanSpeech('我是好人。(共120字)', view, '艾德')).toBe('我是好人。');
     expect(cleanSpeech('我查验了3号，查杀。', view, '艾德')).toBe('我查验了3号，查杀。');
   });
+  it('unwraps a decision-style JSON answer into a plain line', () => {
+    expect(cleanSpeech('{"vote": "12号", "reason": "同意刀12。他拿警徽还查杀3。"}', view, '艾德')).toBe('同意刀12。他拿警徽还查杀3。');
+    expect(cleanSpeech('```json\n{"target": 5, "reason": "他像预言家"}\n```', view, '艾德')).toBe('我选5号。他像预言家');
+    expect(cleanSpeech('{"speech": "刀12，明天我悍跳。"}', view, '艾德')).toBe('刀12，明天我悍跳。');
+    expect(cleanSpeech('{"vote": "12号", "reason": "同意刀12', view, '艾德')).not.toContain('{');
+  });
   it('keeps colons that are part of the speech', () => {
     expect(cleanSpeech('我的结论：5号是狼', view, '艾德')).toBe('我的结论：5号是狼');
   });
@@ -123,6 +129,9 @@ describe('wolf chat task', () => {
   it('asks round-1 speakers to answer the teammates before them', () => {
     expect(speechTask(req(1), view([chat(4, '刀 6 号')]))).toContain('先回应在你之前发言的队友');
     expect(speechTask(req(1), view([]))).not.toContain('队友说了');
+  });
+  it('tells the model this is talk, not a JSON vote', () => {
+    expect(speechTask(req(1), view([]))).toContain('不要输出 JSON');
   });
   it('just passes in later rounds when nothing new was said', () => {
     expect(speechTask(req(2), view([chat(4, '刀 6 号'), chat(2, '同意')]))).toContain('只回复：pass');
