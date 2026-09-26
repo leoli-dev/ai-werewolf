@@ -471,7 +471,7 @@ export function unwrapJsonSpeech(text: string): string {
 }
 
 /** Trim quotes / "3号艾德：" prefixes a model sometimes adds to speeches. */
-export function cleanSpeech(text: string, view: PlayerView, personaName: string): string {
+export function cleanSpeech(text: string, view: { self: { id: number } }, personaName: string): string {
   let s = unwrapJsonSpeech(text).trim();
   const head = s.slice(0, 20);
   const colon = head.search(/[：:]/);

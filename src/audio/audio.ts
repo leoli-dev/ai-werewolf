@@ -3,11 +3,16 @@
  * 夜晚危险 — cross-faded with the day/night mix, ambience (wind, rain,
  * thunder) and one-shot SFX (doors, wolves, rats, bats, dawn stingers).
  * When the game is decided an ending takes over the music: a lament under
- * wolf howls, or a bright dance tune with birdsong.
+ * wolf howls, or a bright dance tune with birdsong. The 颁奖典礼 after it has
+ * its own: birdsong under a gentle tune, a fanfare and march with applause and
+ * whistles for the best player, a comic oom-pah with boos for the worst.
  */
 
-/** 'hush': the music drops out (the wolves are about to strike). */
-export type Ending = 'hush' | 'wolf' | 'good';
+/**
+ * 'hush': the music drops out (the wolves are about to strike).
+ * 'ceremony' / 'award' / 'shame': the awards — the speeches, the best player's podium, the worst's.
+ */
+export type Ending = 'hush' | 'wolf' | 'good' | 'ceremony' | 'award' | 'shame';
 
 type Bus = GainNode;
 
@@ -44,6 +49,7 @@ export class AudioEngine {
   private endNext = 0;
   private endStep = 0;
   private nextCall = 0;
+  private nextClap = 0;
 
   get started() {
     return this.ctx !== null;
@@ -154,15 +160,24 @@ export class AudioEngine {
     this.nightBus.gain.setTargetAtTime(0, t, 0.4);
     // wolves: only their howls are left on the wind; the village: a light breeze
     this.rainGain.gain.setTargetAtTime(0, t, 0.8);
-    this.windGain.gain.setTargetAtTime(kind === 'good' ? 0.04 : kind === 'wolf' ? 0 : 0.12, t, 1);
+    this.windGain.gain.setTargetAtTime(kind === 'wolf' ? 0 : kind === 'hush' ? 0.12 : 0.04, t, 1);
     if (kind === 'hush') return;
     this.endBus = ctx.createGain();
     this.endBus.gain.setValueAtTime(0.0001, t);
-    this.endBus.gain.exponentialRampToValueAtTime(1, t + 1.5);
+    // the awards' fanfare / trombone come in at once; the rest swell in
+    this.endBus.gain.exponentialRampToValueAtTime(1, t + (kind === 'award' || kind === 'shame' ? 0.05 : 1.5));
     this.endBus.connect(this.music);
     this.endNext = t + (kind === 'wolf' ? 1.2 : 0.8);
     this.endStep = 0;
     this.nextCall = t + (kind === 'wolf' ? 0.3 : 1.5);
+    this.nextClap = t + 0.3;
+    if (kind === 'award') {
+      this.fanfare(t + 0.1);
+      this.endNext = t + 2.6;
+    } else if (kind === 'shame') {
+      this.sadTrombone(t + 0.1);
+      this.endNext = t + 3.4;
+    }
   }
 
   dispose() {
@@ -496,6 +511,235 @@ export class AudioEngine {
         this.bird(this.nextCall);
         this.nextCall += 0.8 + Math.random() * 2.5;
       }
+    } else if (this.ending === 'ceremony') {
+      // a gentle pastoral at 84 bpm under the birds, quiet enough to read by
+      while (this.endNext < horizon) {
+        this.pastoral(this.endNext, this.endStep++);
+        this.endNext += 60 / 84 / 2;
+      }
+      while (this.nextCall < horizon) {
+        this.bird(this.nextCall);
+        if (Math.random() < 0.3) this.bird(this.nextCall + 0.2 + Math.random() * 0.4);
+        this.nextCall += 0.6 + Math.random() * 1.8;
+      }
+    } else if (this.ending === 'award') {
+      while (this.endNext < horizon) {
+        this.march(this.endNext, this.endStep++);
+        this.endNext += 60 / 116 / 2;
+      }
+      // the crowd claps and whistles
+      while (this.nextClap < horizon) {
+        this.clap(this.nextClap);
+        this.nextClap += 0.02 + Math.random() * 0.05;
+      }
+      while (this.nextCall < horizon) {
+        this.whistle(this.nextCall);
+        this.nextCall += 1.2 + Math.random() * 2.8;
+      }
+    } else if (this.ending === 'shame') {
+      while (this.endNext < horizon) {
+        this.oomPah(this.endNext, this.endStep++);
+        this.endNext += 60 / 100 / 2;
+      }
+      while (this.nextCall < horizon) {
+        this.boo(this.nextCall);
+        this.nextCall += 1.5 + Math.random() * 3;
+      }
+      // scattered mocking claps
+      while (this.nextClap < horizon) {
+        if (Math.random() < 0.5) this.clap(this.nextClap, 0.6);
+        this.nextClap += 0.12 + Math.random() * 0.3;
+      }
+    }
+  }
+
+  /** One eighth of the ceremony's pastoral: soft arpeggios over a warm pad (32-step loop). */
+  private pastoral(t: number, i: number) {
+    const bus = this.endBus!;
+    const step = i % 32;
+    // F | C | Dm | B♭
+    const chords = [
+      [53, 65, 69, 72],
+      [48, 64, 67, 72],
+      [50, 65, 69, 74],
+      [46, 65, 70, 74],
+    ];
+    const [root, ...up] = chords[Math.floor(step / 8)];
+    const beat = 60 / 84;
+    if (step % 8 === 0) {
+      this.tone(bus, t, midi(root - 12), 'sine', 0.08, 0.3, beat * 4 + 0.5, 0.4);
+      for (const n of up) this.tone(bus, t, midi(n - 12), 'triangle', 0.012, 0.8, beat * 4, 0.6);
+    }
+    const arp = [0, 1, 2, 1, 2, 0, 1, 2];
+    const n = up[arp[step % 8]] + (step % 16 >= 8 && step % 8 === 4 ? 12 : 0);
+    this.tone(bus, t, midi(n), 'sine', 0.035, 0.01, 0.6, 0.5);
+  }
+
+  /** A brass note: bright detuned saws through a swelling low-pass. */
+  private brass(bus: AudioNode, t: number, n: number, dur: number, vol: number, bend = 0) {
+    const ctx = this.ctx!;
+    const f = this.filter('lowpass', 900, 1.2);
+    f.frequency.setValueAtTime(700, t);
+    f.frequency.linearRampToValueAtTime(2600, t + 0.06);
+    f.frequency.setTargetAtTime(1500, t + 0.08, 0.2);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.03);
+    g.gain.setValueAtTime(vol * 0.8, t + Math.max(0.05, dur - 0.05));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.15);
+    f.connect(g);
+    this.out(g, bus, 0.35);
+    for (const det of [-6, 5]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(midi(n), t);
+      if (bend) o.frequency.linearRampToValueAtTime(midi(n + bend), t + dur);
+      o.detune.value = det;
+      o.connect(f);
+      o.start(t);
+      o.stop(t + dur + 0.2);
+    }
+  }
+
+  /** 颁奖: ta-ta-ta-taaa! */
+  private fanfare(t: number) {
+    const bus = this.endBus!;
+    const tr = 0.14;
+    const line: [number, number, number][] = [
+      [0, 60, tr], [tr, 64, tr], [tr * 2, 67, tr], [tr * 3, 72, 0.5],
+      [tr * 3 + 0.55, 67, tr], [tr * 4 + 0.55, 72, 1.3],
+    ];
+    for (const [at, n, d] of line) {
+      this.brass(bus, t + at, n, d, 0.07);
+      this.brass(bus, t + at, n - 12, d, 0.04);
+    }
+    const hold = t + tr * 4 + 0.55;
+    for (const n of [48, 55, 64, 67]) this.brass(bus, hold, n, 1.4, 0.03);
+    // cymbal crash
+    this.burst(bus, hold, 'highpass', 5000, 0.5, 0.12, 0.002, 1.6, 0.4);
+  }
+
+  /** One eighth of the award march in C: bass, snare and a brass tune (64-step loop). */
+  private march(t: number, i: number) {
+    const bus = this.endBus!;
+    const step = i % 64;
+    const bar = Math.floor(step / 8);
+    const pos = step % 8;
+    // C | G | C | F | C | G | F G | C
+    const roots = [48, 43, 48, 41, 48, 43, pos < 4 ? 41 : 43, 48];
+    const root = roots[bar];
+    if (pos === 0 || pos === 4) this.tone(bus, t, midi(root - 12 + (pos === 4 ? 7 : 0)), 'triangle', 0.15, 0.005, 0.3, 0.1);
+    if (pos === 2 || pos === 6) {
+      this.burst(bus, t, 'bandpass', 1800, 0.8, 0.09, 0.001, 0.12, 0.3); // snare
+      const triad = { 48: [64, 67, 72], 43: [62, 67, 71], 41: [65, 69, 72] }[root]!;
+      for (const n of triad) this.tone(bus, t, midi(n - 12), 'square', 0.01, 0.004, 0.12, 0.2);
+    }
+    if (pos === 7) this.burst(bus, t, 'bandpass', 2200, 0.8, 0.04, 0.001, 0.06, 0.2);
+    const tune = [
+      67, 0, 72, 0, 72, 74, 76, 0,
+      74, 0, 71, 0, 67, 0, 0, 0,
+      72, 0, 76, 0, 79, 0, 76, 72,
+      77, 0, 0, 0, 76, 0, 74, 0,
+      72, 0, 76, 0, 79, 0, 84, 0,
+      83, 0, 79, 0, 74, 0, 0, 0,
+      77, 0, 76, 0, 74, 0, 71, 0,
+      72, 0, 67, 0, 72, 0, 0, 0,
+    ];
+    const n = tune[step];
+    if (n) this.brass(bus, t, n, 0.24, 0.045);
+  }
+
+  /** 最差: wah, wah, wah, waaaah. */
+  private sadTrombone(t: number) {
+    const bus = this.endBus!;
+    const notes: [number, number, number][] = [[0, 55, 0.5], [0.6, 54, 0.5], [1.2, 53, 0.5], [1.8, 52, 1.4]];
+    for (const [at, n, d] of notes) this.brass(bus, t + at, n - 12, d, 0.09, at === 1.8 ? -0.5 : 0);
+  }
+
+  /** One eighth of a clumsy oom-pah polka for the losers (32-step loop). */
+  private oomPah(t: number, i: number) {
+    const bus = this.endBus!;
+    const step = i % 32;
+    const bar = Math.floor(step / 4);
+    const pos = step % 4;
+    const roots = [45, 40, 45, 40, 41, 40, 45, 45];
+    if (pos === 0) this.brass(bus, t, roots[bar] - 12, 0.22, 0.06);
+    if (pos === 2) this.tone(bus, t, midi(roots[bar] + 7), 'square', 0.02, 0.004, 0.1, 0.1);
+    const tune = [69, 0, 72, 71, 69, 0, 68, 0, 69, 0, 64, 0, 0, 0, 0, 0, 65, 0, 69, 68, 65, 0, 64, 0, 69, 0, 57, 0, 0, 0, 0, 0];
+    const n = tune[step];
+    if (n) this.tone(bus, t, midi(n), 'triangle', 0.05, 0.005, 0.2, 0.25);
+  }
+
+  /** One hand clap somewhere in the crowd. */
+  private clap(t: number, vol = 1) {
+    const ctx = this.ctx!;
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = Math.random() * 1.8 - 0.9;
+    pan.connect(this.sfx);
+    this.burst(pan, t, 'bandpass', 900 + Math.random() * 1400, 1.1, (0.03 + Math.random() * 0.05) * vol, 0.001, 0.03 + Math.random() * 0.04, 0.25);
+  }
+
+  /** A two-finger whistle from the crowd: a rising shriek, or the up-down wolf whistle. */
+  private whistle(t: number) {
+    const ctx = this.ctx!;
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = Math.random() * 1.6 - 0.8;
+    pan.connect(this.sfx);
+    const base = 1900 + Math.random() * 700;
+    const o = ctx.createOscillator();
+    const wolf = Math.random() < 0.5;
+    const dur = wolf ? 0.95 : 0.6;
+    o.frequency.setValueAtTime(base, t);
+    if (wolf) {
+      o.frequency.exponentialRampToValueAtTime(base * 1.6, t + 0.22);
+      o.frequency.setValueAtTime(base * 1.1, t + 0.4);
+      o.frequency.exponentialRampToValueAtTime(base * 1.55, t + 0.55);
+      o.frequency.exponentialRampToValueAtTime(base * 0.8, t + dur);
+    } else {
+      o.frequency.exponentialRampToValueAtTime(base * 1.5, t + 0.12);
+      o.frequency.setValueAtTime(base * 1.5, t + 0.45);
+      o.frequency.exponentialRampToValueAtTime(base * 1.35, t + dur);
+    }
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.05, t + 0.03);
+    if (wolf) {
+      g.gain.setValueAtTime(0.05, t + 0.28);
+      g.gain.linearRampToValueAtTime(0.004, t + 0.36);
+      g.gain.linearRampToValueAtTime(0.05, t + 0.44);
+    }
+    g.gain.setValueAtTime(0.05, t + dur - 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g);
+    this.out(g, pan, 0.3);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+    // the breath in it
+    this.burst(pan, t, 'bandpass', base * 1.4, 4, 0.012, 0.02, dur, 0.2);
+  }
+
+  /** A few voices booing ("boooo"), falling in pitch. */
+  private boo(t: number) {
+    const ctx = this.ctx!;
+    const dur = 1.1 + Math.random() * 0.5;
+    const f1 = this.filter('bandpass', 420, 3);
+    const f2 = this.filter('lowpass', 900, 0.7);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.06, t + 0.15);
+    g.gain.setValueAtTime(0.05, t + dur - 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    f1.connect(f2).connect(g);
+    this.out(g, this.sfx, 0.4);
+    for (let v = 0; v < 3; v++) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      const f0 = 150 + Math.random() * 80;
+      o.frequency.setValueAtTime(f0, t);
+      o.frequency.linearRampToValueAtTime(f0 * 0.75, t + dur);
+      o.connect(f1);
+      o.start(t + v * 0.05);
+      o.stop(t + dur + 0.05);
     }
   }
 
@@ -1252,6 +1496,37 @@ export class AudioEngine {
     };
     crow(t0, 1, 1);
     crow(t0 + 1.9, 0.92, 0.45);
+  }
+
+  /** 颁奖台 rising / landing: a low thump with a little dust. */
+  thud(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    const o = this.ctx!.createOscillator();
+    o.frequency.setValueAtTime(90, t);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.35);
+    const g = this.env(t, 0.005, 0.45 * vol, 0.45);
+    o.connect(g);
+    this.out(g, this.sfx, 0.3);
+    o.start(t);
+    o.stop(t + 0.5);
+    this.burst(this.sfx, t, 'lowpass', 600, 0.7, 0.12 * vol, 0.005, 0.4, 0.2);
+  }
+
+  /** 💩 lands: a wet splat and a plop. */
+  splat(vol = 1, delay = 0) {
+    const t = this.now(delay);
+    if (t < 0) return;
+    this.burst(this.sfx, t, 'lowpass', 500 + Math.random() * 300, 1.5, 0.22 * vol, 0.002, 0.13, 0.15);
+    this.burst(this.sfx, t, 'bandpass', 1400, 2, 0.05 * vol, 0.001, 0.05, 0);
+    const o = this.ctx!.createOscillator();
+    o.frequency.setValueAtTime(260 + Math.random() * 80, t);
+    o.frequency.exponentialRampToValueAtTime(70, t + 0.12);
+    const g = this.env(t, 0.002, 0.12 * vol, 0.12);
+    o.connect(g);
+    this.out(g, this.sfx, 0.1);
+    o.start(t);
+    o.stop(t + 0.16);
   }
 
   /** Short UI click for the human's own turn prompts. */

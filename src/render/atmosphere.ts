@@ -26,6 +26,8 @@ export class Atmosphere {
   mix = 0;
   /** 0..1 好人胜利: the fog lifts, the clouds part and the sun comes up. */
   clear = 0;
+  /** 0..1 颁奖典礼: fair weather — white clouds drifting in the clear blue sky. */
+  fair = 0;
   /** 0..1 狼人胜利: a still, blood-red night — no rain, no lightning, a red moon. */
   blood = 0;
   private sun: THREE.Group;
@@ -207,6 +209,10 @@ export class Atmosphere {
       const m = cl.material as THREE.MeshBasicMaterial;
       m.opacity = 0.9 * (1 - c) * (1 - b * 0.6);
       if (b > 0) toward(m.color, 0x3a1016, b);
+      if (this.fair > 0) {
+        m.opacity = Math.max(m.opacity, 0.6 * this.fair);
+        toward(m.color, 0xffffff, this.fair);
+      }
       cl.visible = m.opacity > 0.01;
     });
     // the sun climbs out of the horizon as the fog lifts; the moon is simply there

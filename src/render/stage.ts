@@ -10,6 +10,7 @@ import { Explosions } from './explosion';
 import { Shield } from './shield';
 import { Spring } from './spring';
 import { HouseSkin, Magic, Reticle } from './magic';
+import { PODIUM_H, PODIUM_POS, Podium } from './podium';
 import { PERSONAS } from '../personas';
 import { badgeCanvas, characterSheet, graveCanvas, pixelTexture, setFrame, sheetTexture, werewolfSheet, type Look } from './pixel';
 import { EXIT_PATH, billboardSprite, buildTown, seatAngle, seatPosition, type HouseRefs, type TownRefs } from './town';
@@ -126,6 +127,9 @@ export interface StageSounds {
   hit(vol: number): void;
   /** 狼人胜利: a wolf howls at the moon. */
   howl(vol: number, pitch: number): void;
+  /** 颁奖典礼: the podium thumps into place; poop lands with a splat. */
+  thud(vol: number): void;
+  splat(vol: number): void;
 }
 
 interface Tween {
@@ -185,6 +189,13 @@ export class Stage {
   /** 0..1 how far the survivors have broken into their dance. */
   private dance = 0;
   private actors: Actor[] = [];
+  /** 颁奖典礼's podium, bouquets and flying poop. */
+  private podium = new Podium();
+  /** Awards: who is hopping and clapping on the spot, facing the podium. */
+  private cheering = new Set<number>();
+  /** Bumped whenever the awards move on: the previous part's loops (throwing flowers / poop) stop. */
+  private awardRun = 0;
+  private bouquets: THREE.Sprite[] = [];
   private billboards: THREE.Object3D[] = [];
   private focusRing: THREE.Mesh;
   /** 警徽: worn over the sheriff's head by day. */
@@ -238,6 +249,7 @@ export class Stage {
 
     this.spring = new Spring(this.town);
     this.scene.add(this.spring.group);
+    this.scene.add(this.podium.group);
 
     this.animals = new Animals(this.town.perches, this.town.fliesSpots);
     this.scene.add(this.animals.group);
@@ -1075,6 +1087,243 @@ export class Stage {
     }
   }
 
+  // ── 颁奖典礼 ──
+
+  /**
+   * The awards: everyone is back on the plaza — the dead risen, the exiled home,
+   * every smashed door, sealed house and ruin put right — under a clear blue sky
+   * with white clouds, the tree in blossom and flowers by the roads.
+   */
+  ceremonyScene() {
+    this.resetAll();
+    this.ending = 'good';
+    this.nightTarget = 0;
+    this.atmo.mix = 0;
+    this.atmo.clear = 1;
+    this.atmo.fair = 1;
+    this.spring.grow = 1;
+    this.yawGoal = 0;
+    this.resetView(true);
+  }
+
+  /**
+   * Frame the podium (and the ring round it) for the rest of the ceremony: from
+   * high enough that seat 1's house, behind the camera, never blocks the view.
+   */
+  private awardShot(dist: number) {
+    this.focus(null);
+    this.shot = { target: PODIUM_POS.clone().setY(1.4), until: this.time + 3600, dist, band: 0.5 };
+    this.yawGoal = 0;
+    this.resetView(true);
+    this.pitchGoal = 0.66;
+  }
+
+  /** The podium rises out of the middle of the plaza. */
+  async raisePodium(n: number): Promise<void> {
+    const epoch = this.epoch;
+    this.awardShot(22);
+    this.podium.setup(n, '🏆');
+    this.fx.shake = Math.max(this.fx.shake, 0.12);
+    this.sounds?.thud(0.7);
+    await this.tween(1.6, (k) => epoch === this.epoch && this.podium.rise(k * k * (3 - 2 * k)));
+    if (epoch !== this.epoch) return;
+    this.fx.puff(PODIUM_POS.clone());
+    this.sounds?.thud(1);
+  }
+
+  /** A path from `from` to `to` that steps round the well instead of through it. */
+  private route(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3[] {
+    const d = to.clone().sub(from).setY(0);
+    const len2 = d.lengthSq();
+    if (len2 < 1e-4) return [to];
+    const k = THREE.MathUtils.clamp(-from.clone().setY(0).dot(d) / len2, 0, 1);
+    const near = from.clone().setY(0).addScaledVector(d, k);
+    if (near.length() > 2.6) return [to];
+    const side = near.lengthSq() < 1e-4 ? new THREE.Vector3(-d.z, 0, d.x).normalize() : near.normalize();
+    return [side.multiplyScalar(3.3), to];
+  }
+
+  private async walkTo(a: Actor, gen: number, to: THREE.Vector3, speed = WALK_SPEED): Promise<boolean> {
+    for (const p of this.route(a.sprite.position, to)) {
+      await this.walk(a.sprite, p, () => a.gen === gen, speed);
+      if (a.gen !== gen) return false;
+    }
+    return true;
+  }
+
+  /** A little jump from where they stand to `to` (up onto / down off the podium). */
+  private hop(a: Actor, gen: number, to: THREE.Vector3): Promise<void> {
+    const from = a.sprite.position.clone();
+    const tex = (a.sprite.material as THREE.MeshStandardMaterial).map!;
+    setFrame(tex, 1);
+    return this.tween(0.45, (k) => {
+      if (a.gen !== gen) return;
+      a.sprite.position.lerpVectors(from, to, k);
+      a.sprite.position.y = THREE.MathUtils.lerp(from.y, to.y, k) + Math.sin(k * Math.PI) * 0.6;
+    }).then(() => {
+      if (a.gen === gen) setFrame(tex, 0);
+    });
+  }
+
+  /** Everyone in `ids` walks up and onto the podium, side by side. */
+  private async mount(ids: number[]): Promise<void> {
+    const n = ids.length;
+    await Promise.all(
+      ids.map(async (id, k) => {
+        const a = this.actors[id];
+        const gen = ++a.gen;
+        this.cheering.delete(id);
+        await this.wait(k * 0.25);
+        if (!(await this.walkTo(a, gen, this.podium.foot(k, n), 3.2))) return;
+        await this.hop(a, gen, this.podium.spot(k, n));
+      }),
+    );
+  }
+
+  /** `ids` hop down and go back to their places in the ring. */
+  async stepDown(ids: number[]): Promise<void> {
+    this.awardRun++;
+    for (const b of this.bouquets) this.podium.unplace(b);
+    this.bouquets = [];
+    const n = ids.length;
+    await Promise.all(
+      ids.map(async (id, k) => {
+        const a = this.actors[id];
+        const gen = ++a.gen;
+        await this.hop(a, gen, this.podium.foot(k, n));
+        if (a.gen !== gen) return;
+        await this.walkTo(a, gen, a.base, 3.2);
+      }),
+    );
+  }
+
+  /** Throw `ch` from `a` at `aim` with a little wind-up lunge towards it. */
+  private async lob(a: Actor, gen: number, ch: string, aim: THREE.Vector3, land: (at: THREE.Vector3) => void) {
+    const p0 = a.sprite.position.clone();
+    const dir = aim.clone().sub(p0).setY(0).normalize().multiplyScalar(0.3);
+    await this.tween(0.22, (k) => {
+      if (a.gen !== gen) return;
+      a.sprite.position.x = p0.x + dir.x * Math.sin(k * Math.PI);
+      a.sprite.position.z = p0.z + dir.z * Math.sin(k * Math.PI);
+    });
+    if (a.gen !== gen) return;
+    const from = a.sprite.position.clone().setY(1.3);
+    this.podium.throw(ch, from, aim, { dur: 0.55 + Math.random() * 0.3, arc: 1.2 + Math.random() * 1.6, size: ch === '💩' ? 0.6 : 0.45, land });
+  }
+
+  /**
+   * 全场最佳: the winners walk up onto the podium and get bouquets; everyone else
+   * hops and claps, tossing roses up at them while petals drift down. Resolves once
+   * they are up; the cheering goes on until `stepDown`.
+   */
+  async awardBest(ids: number[]): Promise<void> {
+    const epoch = this.epoch;
+    const run = ++this.awardRun;
+    const live = () => epoch === this.epoch && run === this.awardRun;
+    this.podium.setup(ids.length, '🏆');
+    for (const a of this.actors) if (!ids.includes(a.id)) this.cheering.add(a.id);
+    await this.mount(ids);
+    if (!live()) return;
+    ids.forEach((_, k) => {
+      const at = this.podium.spot(k, ids.length).add(new THREE.Vector3(0.42, 0.95, 0.3));
+      this.bouquets.push(this.podium.place('💐', at, 0.6));
+    });
+    this.podium.sprinkle(['🌸', '🌼', '🌷', '✨'], 60);
+    // roses thrown up from the crowd, landing on the carpet at the winners' feet
+    const fans = this.actors.filter((a) => !ids.includes(a.id));
+    fans.forEach((a) => {
+      void (async () => {
+        await this.wait(Math.random() * 1.5);
+        let flowers = 0;
+        while (live() && flowers++ < 4) {
+          const k = Math.floor(Math.random() * ids.length);
+          const aim = this.podium.spot(k, ids.length).add(new THREE.Vector3((Math.random() - 0.5) * 0.9, 0.08, 0.3 + Math.random() * 0.5));
+          await this.lob(a, a.gen, '🌹', aim, (at) => live() && this.bouquets.push(this.podium.place('🌹', at, 0.3)));
+          await this.wait(1.5 + Math.random() * 3);
+        }
+      })();
+    });
+    void (async () => {
+      while (live()) {
+        await this.wait(2.2);
+        if (live()) this.podium.sprinkle(['🌸', '🌼', '🌷', '✨'], 25);
+      }
+    })();
+  }
+
+  /** 全场最差: the podium turns its sign to 💩 and the losers walk up onto it. */
+  async awardWorst(ids: number[]): Promise<void> {
+    const epoch = this.epoch;
+    ++this.awardRun;
+    this.cheering.clear();
+    this.podium.setup(ids.length, '💩');
+    this.fx.puff(PODIUM_POS.clone().setY(0.4));
+    this.sounds?.thud(0.6);
+    await this.mount(ids);
+    if (epoch !== this.epoch) return;
+  }
+
+  /**
+   * Everyone else gathers round the podium in a ring and pelts the losers with
+   * 💩, hopping and jeering — until the next game. Resolves once the ring has formed.
+   */
+  async poopStorm(worst: number[]): Promise<void> {
+    const epoch = this.epoch;
+    const run = ++this.awardRun;
+    const live = () => epoch === this.epoch && run === this.awardRun;
+    this.awardShot(26);
+    const throwers = this.actors.filter((a) => !worst.includes(a.id));
+    const rx = Math.max(3.6, this.podium.width / 2 + 1.5);
+    const rz = 3.2;
+    const targets = worst.map((id) => this.actors[id]);
+    const arrived = throwers.map(async (a, k) => {
+      const gen = ++a.gen;
+      this.cheering.delete(a.id);
+      // spread round the podium, starting at the front (towards the camera)
+      const th = Math.PI / 2 + ((k + 0.5) / throwers.length) * Math.PI * 2;
+      const spot = new THREE.Vector3(PODIUM_POS.x + Math.cos(th) * rx, 0, PODIUM_POS.z + Math.sin(th) * rz);
+      await this.wait(Math.random() * 0.8);
+      if (!(await this.walkTo(a, gen, spot, 3.4)) || !live()) return;
+      this.cheering.add(a.id);
+      void (async () => {
+        while (live() && a.gen === gen) {
+          await this.wait(0.2 + Math.random() * 0.7);
+          if (!live()) return;
+          const v = targets[Math.floor(Math.random() * targets.length)];
+          const stand = v.sprite.position.clone();
+          // half of it hits them, the rest splats on the carpet round their feet
+          const aim = Math.random() < 0.5
+            ? stand.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.7, 0.35 + Math.random() * 1.3, 0.2))
+            : stand.clone().add(new THREE.Vector3((Math.random() - 0.5) * 1.6, 0.12, (Math.random() - 0.5) * 1.6));
+          await this.lob(a, gen, '💩', aim, (at) => {
+            if (!live()) return;
+            this.podium.place('💩', at, 0.32 + Math.random() * 0.12);
+            this.sounds?.splat(this.falloff(at) * 0.8);
+            // the one hit flinches
+            void this.tween(0.25, (k) => {
+              if (!live()) return;
+              v.sprite.position.x = stand.x + Math.sin(k * Math.PI * 4) * 0.08;
+            });
+          });
+        }
+      })();
+    });
+    await Promise.all(arrived);
+  }
+
+  /** Awards: the crowd hops and claps on the spot, facing the podium. */
+  private cheerStep(t: number) {
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    for (const id of this.cheering) {
+      const a = this.actors[id];
+      if (!a.sprite.visible) continue;
+      const hop = Math.sin(t * 9 + a.phase * 3);
+      a.sprite.position.y = Math.abs(hop) * 0.14;
+      a.sprite.scale.x = PODIUM_POS.clone().sub(a.sprite.position).dot(right) >= 0 ? 1 : -1;
+      setFrame((a.sprite.material as THREE.MeshStandardMaterial).map!, hop > 0.4 ? 1 : hop < -0.4 ? 2 : 0);
+    }
+  }
+
   resetAll() {
     this.epoch++;
     this.badgeHolder = null;
@@ -1085,7 +1334,12 @@ export class Stage {
     this.dance = 0;
     this.atmo.clear = 0;
     this.atmo.blood = 0;
+    this.atmo.fair = 0;
     this.spring.reset();
+    this.podium.clear();
+    this.cheering.clear();
+    this.bouquets = [];
+    this.awardRun++;
     for (const a of this.actors) {
       a.status = 'alive';
       a.gen++;
@@ -1382,8 +1636,10 @@ export class Stage {
     this.shield.update(dt, t);
     this.magic.update(dt, t);
     this.spring.update(dt, t);
+    this.podium.update(dt, t);
     this.stepTweens(dt);
     if (this.dance > 0) this.danceStep(t);
+    if (this.cheering.size) this.cheerStep(t);
     for (const w of this.town.windows) w.emissiveIntensity = THREE.MathUtils.lerp(0.15, 2.2, n);
     for (const h of this.town.houses) {
       const glow = h.lit ? THREE.MathUtils.lerp(0.15, 2.2, n) : 0;
@@ -1512,7 +1768,7 @@ export class Stage {
         if (!anchor) return { x: 0, y: 0, visible: false };
         const badged = this.badge.visible && !this.badgeBusy && this.badgeHolder === a.id;
         const height = a.wolf.visible ? 2.7 : a.status === 'dead' ? 1.3 : badged ? 2.8 : 2.25;
-        const p = anchor.clone().setY(height).project(this.camera);
+        const p = anchor.clone().setY((anchor.y > PODIUM_H / 2 ? PODIUM_H : 0) + height).project(this.camera);
         return {
           x: rect.left + ((p.x + 1) / 2) * rect.width,
           y: rect.top + ((1 - p.y) / 2) * rect.height,
