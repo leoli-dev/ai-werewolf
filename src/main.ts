@@ -189,15 +189,9 @@ async function play(settings: Settings, save?: SaveGame) {
     ui!.setPaused(false);
     game.resume();
   };
-  // losing focus (switching window/tab) pauses the game
-  // (once the game is over there is nothing to pause: leave the results / 回看记录 as they are)
-  const onBlur = () => game.state.phase !== 'ended' && void pause();
-  const onVisibility = () => document.hidden && game.state.phase !== 'ended' && void pause();
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && !document.querySelector('.modal-back')) void pause();
   };
-  window.addEventListener('blur', onBlur);
-  document.addEventListener('visibilitychange', onVisibility);
   document.addEventListener('keydown', onKey);
 
   const done = game.run().catch((e) => {
@@ -210,8 +204,6 @@ async function play(settings: Settings, save?: SaveGame) {
   });
   await Promise.race([left, done.then(() => left)]);
   unsubConfig();
-  window.removeEventListener('blur', onBlur);
-  document.removeEventListener('visibilitychange', onVisibility);
   document.removeEventListener('keydown', onKey);
   game.abort();
   stage.paused = false;
