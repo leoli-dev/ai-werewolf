@@ -48,6 +48,8 @@ export interface GameState {
   /** Player currently being asked to act/speak, for highlighting. */
   actor: number | null;
   actorLabel: string;
+  /** The actor is making a speech (not a pick): the HUD keeps the last one readable meanwhile. */
+  actorSpeaks: boolean;
   winner: Winner;
   witch: { hasAntidote: boolean; hasPoison: boolean };
   /** The hunter's one shot is spent (fired, or lost to poison). */
@@ -144,6 +146,7 @@ export class Game {
       })),
       actor: null,
       actorLabel: '',
+      actorSpeaks: false,
       winner: null,
       witch: { hasAntidote: true, hasPoison: true },
       hunterShot: false,
@@ -322,9 +325,10 @@ export class Game {
     this.publish();
   }
 
-  private setActor(id: number | null, label = '') {
+  private setActor(id: number | null, label = '', speaks = false) {
     this.state.actor = id;
     this.state.actorLabel = label;
+    this.state.actorSpeaks = speaks;
     this.publish();
   }
 
@@ -380,7 +384,7 @@ export class Game {
 
   private async ask(id: number, req: DecisionRequest, label: string): Promise<string | number | null> {
     this.guard();
-    this.setActor(id, label);
+    this.setActor(id, label, req.kind === 'speech');
     try {
       const rec = await this.answer(id, req);
       if ('t' in rec) {
