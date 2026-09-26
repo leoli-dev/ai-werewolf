@@ -82,6 +82,12 @@ const BUBBLE_COLORS: { bg: string; edge: string }[] = [
 ];
 
 /** Roster / label colour of a known role: wolves red, the gods (神职) green, villagers plain. */
+/** The human's own guess at a player they have no system info on. */
+export type Mark = 'villager' | 'god' | 'wolf';
+const MARK_ORDER: (Mark | null)[] = [null, 'villager', 'god', 'wolf'];
+const MARK_NAME: Record<Mark, string> = { villager: '民', god: '神', wolf: '狼' };
+const MARK_CLS: Record<Mark, string> = { villager: 'good', god: 'god', wolf: 'wolf' };
+
 function roleCls(role: Role): 'wolf' | 'god' | 'good' {
   return teamOf(role) === 'wolf' ? 'wolf' : role === 'villager' ? 'good' : 'god';
 }
@@ -109,6 +115,8 @@ export interface GameUIOptions {
   restoring: boolean;
   /** Game time already played (resumed games). */
   elapsedMs: number;
+  /** The human's 民/神/狼 marks (resumed games). */
+  marks?: (Mark | null)[];
   onPause: () => void;
 }
 
@@ -127,6 +135,8 @@ export class GameUI {
   private bubbleSeq = 0;
   private tab: Tab = 'round';
   private playerFilter: number | null = null;
+  /** Per seat: the human's own 民/神/狼 guess (only shown where the system tells them nothing). */
+  private marks: (Mark | null)[];
   private pendingTarget: { req: TargetRequest; select: (id: number) => void } | null = null;
   private lastPhase = '';
   private clock!: HTMLElement;
@@ -183,6 +193,7 @@ export class GameUI {
   ) {
     this.restoring = opts.restoring;
     this.playedMs = opts.elapsedMs;
+    this.marks = game.players.map((_, i) => opts.marks?.[i] ?? null);
     this.build();
     this.agent = {
       speak: (req, view) => this.askSpeech(req, view),
@@ -214,6 +225,27 @@ export class GameUI {
     if (k === 'werewolf' && this.game.players[this.me].role === 'werewolf') return { text: '狼队友', cls: 'wolf' };
     if (ring) return { text: `查验：${ring === 'wolf' ? '狼人' : '好人'}`, cls: ring, ring };
     return null;
+  }
+
+  /** For the save. */
+  get playerMarks(): (Mark | null)[] {
+    return this.marks.slice();
+  }
+
+  /** What to show next to a player's name: the system's info, else the human's own mark. */
+  private identityOf(id: number): { text: string; cls: string; mark: boolean } | null {
+    const k = this.knownOf(id);
+    if (k) return { text: k.text, cls: k.cls, mark: false };
+    const m = this.marks[id];
+    return m ? { text: MARK_NAME[m], cls: MARK_CLS[m], mark: true } : null;
+  }
+
+  /** 民 → 神 → 狼 → none. */
+  private cycleMark(id: number) {
+    const i = MARK_ORDER.indexOf(this.marks[id]);
+    this.marks[id] = MARK_ORDER[(i + 1) % MARK_ORDER.length];
+    this.renderRoster();
+    this.renderChat();
   }
 
   private ringOf(id: number): 'good' | 'wolf' | undefined {
@@ -936,11 +968,31 @@ export class GameUI {
         },
         num,
         h('span', { class: 'name' }, p.name, p.id === this.me ? '（你）' : '', this.game.state.sheriff === p.id ? h('span', { class: 'star', title: '警长' }, ' ★警长') : ''),
-        h('span', { class: `tag ${k?.cls ?? ''}` }, k?.text ?? (p.alive ? '' : '出局')),
+        k ? h('span', { class: `tag ${k.cls}` }, k.text) : this.markCell(p.id, !p.alive && !this.revived),
       );
       return row;
     });
     this.roster.replaceChildren(...rows);
+  }
+
+  /** A player the system tells the human nothing about: a button to mark them 民/神/狼. */
+  private markCell(id: number, dead: boolean) {
+    const m = this.marks[id];
+    const btn = h(
+      'button',
+      {
+        class: `mark ${m ? `set ${MARK_CLS[m]}` : ''}`,
+        title: '自定义身份标记：点击切换 民 → 神 → 狼 → 清除',
+        'aria-label': `标记 ${seat(id)} 的身份`,
+        onclick: (ev: Event) => {
+          ev.stopPropagation();
+          this.cycleMark(id);
+        },
+        onkeydown: (ev: KeyboardEvent) => ev.stopPropagation(),
+      },
+      m ? MARK_NAME[m] : '标记',
+    );
+    return h('span', { class: 'tag' }, dead ? h('span', { class: 'out' }, '出局') : null, btn);
   }
 
   private pick(id: number) {
@@ -1022,8 +1074,15 @@ export class GameUI {
     return h(
       'div',
       { class: `msg said ${cls}`, style: bubbleStyle(id) },
-      h('div', { class: 'who' }, h('span', { class: 'n' }, String(id + 1)), P[id].name, id === this.me ? h('span', { class: 'you' }, '（你）') : null, ...rest),
+      h('div', { class: 'who' }, h('span', { class: 'n' }, String(id + 1)), P[id].name, id === this.me ? h('span', { class: 'you' }, '（你）') : null, this.identityChip(id), ...rest),
     );
+  }
+
+  /** The speaker's identity in the log: the system's info, or the human's mark (dashed). */
+  private identityChip(id: number) {
+    const k = this.identityOf(id);
+    if (!k) return null;
+    return h('span', { class: `idtag ${k.cls} ${k.mark ? 'mark' : ''}`, title: k.mark ? '你的自定义标记' : '系统给出的身份信息' }, k.text);
   }
 
   private appendCeremony(e: CeremonyEntry, scroll = true) {

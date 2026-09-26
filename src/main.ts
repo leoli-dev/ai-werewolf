@@ -111,6 +111,7 @@ async function play(settings: Settings, save?: SaveGame) {
   ui = new GameUI(app, labels, stage, game, humanSeat, settings.godView, leave, looks, {
     restoring: !!save,
     elapsedMs: save?.elapsedMs ?? 0,
+    marks: save?.marks,
     onPause: () => void pause(),
   });
 
@@ -140,6 +141,7 @@ async function play(settings: Settings, save?: SaveGame) {
 
   // ── save / pause ──
   let savedLen = save ? save.journal.length : -1;
+  let savedMarks = JSON.stringify(save?.marks ?? null);
   const snapshot = (): SaveGame => {
     const s = game.state;
     return {
@@ -151,6 +153,7 @@ async function play(settings: Settings, save?: SaveGame) {
       journal: game.journal.slice(),
       agents: agents.map((a) => a.snapshot?.() ?? null),
       elapsedMs: ui!.elapsedMs,
+      marks: ui!.playerMarks,
       meta: { seat: humanSeat, role: game.players[humanSeat].role, day: s.day, phase: s.phase, alive: game.alive().length },
     };
   };
@@ -173,10 +176,13 @@ async function play(settings: Settings, save?: SaveGame) {
       save: () => {
         const snap = snapshot();
         const err = writeSave(snap);
-        if (!err) savedLen = snap.journal.length;
+        if (!err) {
+          savedLen = snap.journal.length;
+          savedMarks = JSON.stringify(snap.marks);
+        }
         return err;
       },
-      dirty: () => game.journal.length !== savedLen,
+      dirty: () => game.journal.length !== savedLen || JSON.stringify(ui!.playerMarks) !== savedMarks,
       config: () => showConfig(app, { inGame: settings.mode }),
     });
     pausing = false;
