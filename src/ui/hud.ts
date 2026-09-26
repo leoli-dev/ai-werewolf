@@ -150,6 +150,12 @@ export class GameUI {
   private unreadSpeech = false;
   /** Who said the unread speech: the camera stays on them until the human moves on. */
   private lastSpeaker: number | null = null;
+  /** The banner label (e.g. 警上发言) the last speaker spoke under. */
+  private lastSpeakerLabel = '';
+  /** The actor's label while they were asked to speak, to carry over to their speech. */
+  private speakingLabel: { id: number; label: string } | null = null;
+  /** The next AI is still thinking: the action panel shows a disabled 下一位 button. */
+  private waitingFor: number | null = null;
   /** A ready speech held back until the human asks for it (see holdSpeech). */
   private held: { speaker: number; release: () => void } | null = null;
   /** The exile's last words are over: waiting for the human to send them off (see confirmExile). */
@@ -279,6 +285,9 @@ export class GameUI {
     this.cleanups.push(() => document.removeEventListener('keydown', onKey));
     this.cleanups.push(onConfigChange((c) => {
       if (!c.stepSpeech) this.held?.release();
+      this.renderActor();
+      this.renderRoster();
+      this.renderWaiting();
     }));
   }
 
@@ -300,6 +309,7 @@ export class GameUI {
         resolve();
       };
       this.held = { speaker, release };
+      this.waitingFor = null;
       const p = this.game.players[speaker];
       // no chime: this is a reading aid, not a decision
       this.action.replaceChildren(
@@ -543,9 +553,20 @@ export class GameUI {
     if (e.type === 'speech') {
       this.unreadSpeech = e.speaker !== this.me;
       this.lastSpeaker = e.speaker ?? null;
+      const said = this.speakingLabel;
+      this.lastSpeakerLabel = said && said.id === e.speaker ? said.label : '';
+      // not held back (逐条查看 off): the new speech replaces the waiting panel
+      if (this.waitingFor !== null) {
+        this.waitingFor = null;
+        this.close();
+      }
     }
     else if (e.type === 'vote') this.unreadSpeech = false;
     this.trackBubble(e);
+    if (e.type === 'speech' || e.type === 'vote') {
+      this.renderActor();
+      this.renderRoster();
+    }
     if (this.matches(e)) this.appendMsg(e);
     if (e.type === 'private' || e.type === 'gm' || e.type === 'death') this.renderRoster();
   }
@@ -625,33 +646,9 @@ export class GameUI {
     const phaseEl = this.banner.querySelector('.phase')!;
     phaseEl.textContent = phaseName[s.phase];
     phaseEl.className = `phase ${night ? 'night' : ''}`;
-    const actorEl = this.banner.querySelector('.actor')!;
-    const secret = night && !this.godView;
-    const mine = s.actor === this.me;
-    // At night the banner only shows the public turn and how long it has lasted —
-    // the timer restarts per turn, never per actor (per-actor restarts would leak
-    // e.g. whether the witch was asked to save someone). Your own action is shown.
-    const actorKey = secret && !mine
-      ? (s.nightStep ? `step:${s.day}:${s.nightStep}` : '')
-      : s.actor !== null ? `${s.actor}:${s.actorLabel}` : '';
-    if (actorKey !== this.actorKey) {
-      this.actorKey = actorKey;
-      clearInterval(this.actorTimer);
-      if (!actorKey) actorEl.textContent = '';
-      else {
-        this.actorSince = this.elapsedMs;
-        const timer = h('span', { class: 'timer' });
-        actorEl.replaceChildren(
-          secret && !mine ? '夜幕下' : `${seat(s.actor!)} ${this.game.players[s.actor!].name} · ${s.actorLabel}`,
-          h('span', { class: 'dots' }),
-          mine ? '' : timer,
-        );
-        this.actorTimer = window.setInterval(() => {
-          const sec = Math.floor((this.elapsedMs - this.actorSince) / 1000);
-          timer.textContent = sec >= 3 ? ` ${sec}s` : '';
-        }, 500);
-      }
-    }
+    if (s.actor !== null && s.actorSpeaks) this.speakingLabel = { id: s.actor, label: s.actorLabel };
+    this.renderActor();
+    this.renderWaiting();
     if (s.nightStep !== this.lastStep) {
       this.lastStep = s.nightStep;
       if (s.nightStep) {
@@ -679,6 +676,52 @@ export class GameUI {
       clearInterval(this.clockTimer);
       this.renderClock();
       this.showEnd(s);
+    }
+  }
+
+  /**
+   * The banner's "who is on": the acting player with a running timer — or, while the
+   * human is still reading the last AI speech (逐条查看), that speaker, so the banner,
+   * roster and bubbles agree; the next one's thinking shows over their head instead.
+   */
+  private renderActor() {
+    const s = this.game.state;
+    const actorEl = this.banner.querySelector('.actor')!;
+    const reading = this.readingSpeaker();
+    if (reading !== null) {
+      const actorKey = `read:${reading}:${this.lastSpeakerLabel}`;
+      if (actorKey === this.actorKey) return;
+      this.actorKey = actorKey;
+      clearInterval(this.actorTimer);
+      actorEl.textContent = `${seat(reading)} ${this.game.players[reading].name}${this.lastSpeakerLabel ? ` · ${this.lastSpeakerLabel}` : ''}`;
+      return;
+    }
+    const night = s.phase === 'night';
+    const secret = night && !this.godView;
+    const mine = s.actor === this.me;
+    // At night the banner only shows the public turn and how long it has lasted —
+    // the timer restarts per turn, never per actor (per-actor restarts would leak
+    // e.g. whether the witch was asked to save someone). Your own action is shown.
+    const actorKey = secret && !mine
+      ? (s.nightStep ? `step:${s.day}:${s.nightStep}` : '')
+      : s.actor !== null ? `${s.actor}:${s.actorLabel}` : '';
+    if (actorKey !== this.actorKey) {
+      this.actorKey = actorKey;
+      clearInterval(this.actorTimer);
+      if (!actorKey) actorEl.textContent = '';
+      else {
+        this.actorSince = this.elapsedMs;
+        const timer = h('span', { class: 'timer' });
+        actorEl.replaceChildren(
+          secret && !mine ? '夜幕下' : `${seat(s.actor!)} ${this.game.players[s.actor!].name} · ${s.actorLabel}`,
+          h('span', { class: 'dots' }),
+          mine ? '' : timer,
+        );
+        this.actorTimer = window.setInterval(() => {
+          const sec = Math.floor((this.elapsedMs - this.actorSince) / 1000);
+          timer.textContent = sec >= 3 ? ` ${sec}s` : '';
+        }, 500);
+      }
     }
   }
 
@@ -824,6 +867,43 @@ export class GameUI {
     return actor;
   }
 
+  /**
+   * The AI whose speech the human is still reading (逐条查看) while the next AI
+   * speaker thinks or waits to be let through; null once the human's own turn or
+   * a vote takes over. The roster and banner point at them, not at the thinker.
+   */
+  private readingSpeaker(): number | null {
+    if (!this.unreadSpeech || !getConfig().stepSpeech || this.lastSpeaker === null) return null;
+    const s = this.game.state;
+    if (s.actor !== null && (s.actor === this.me || !s.actorSpeaks)) return null;
+    return this.lastSpeaker;
+  }
+
+  /** While the next AI thinks, the 下一位 button is already there, disabled. */
+  private renderWaiting() {
+    // holdSpeech owns the panel once the speech is ready
+    if (this.held) return;
+    const s = this.game.state;
+    const reading = this.readingSpeaker() !== null;
+    // the model just answered: keep the panel up until holdSpeech enables the button
+    if (reading && s.actor === null && this.waitingFor !== null) return;
+    const next = reading ? s.actor : null;
+    if (next === this.waitingFor) return;
+    if (this.waitingFor !== null) this.close();
+    this.waitingFor = next;
+    if (next === null) return;
+    // no chime: nothing to decide yet
+    this.action.replaceChildren(
+      h(
+        'div',
+        { class: 'next-speech' },
+        h('div', { class: 'hint' }, `${seat(next)} ${this.game.players[next].name} 正在思考中…`),
+        h('button', { class: 'btn primary', disabled: true }, '下一位正在思考中…'),
+      ),
+    );
+    this.action.classList.add('show');
+  }
+
   /** Night actors stay secret unless it is you (or god view): never point the camera at one. */
   private visibleActor(): number | null {
     const s = this.game.state;
@@ -833,7 +913,7 @@ export class GameUI {
   }
 
   private renderRoster() {
-    const actor = this.visibleActor();
+    const actor = this.readingSpeaker() ?? this.visibleActor();
     const rows = this.game.players.map((p) => {
       const k = this.knownOf(p.id);
       const num = h('span', { class: `num ${k?.ring ? `ring-${k.ring}` : ''}` }, String(p.id + 1));
@@ -971,15 +1051,17 @@ export class GameUI {
       const k = this.knownOf(i);
       const b = this.bubbles.get(i);
       const thinking = actor === i && this.held?.speaker !== i;
+      // spelled out while the last speech is still being read, so it's clear who is next
+      const thinkingText = this.waitingFor === i ? '正在思考中…' : '...';
       // newest words on top; hovering a bubble brings it to the front (CSS)
       el.style.zIndex = this.raised === i ? '9999' : String(b ? 10 + b.seq : 1);
-      const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? `${b.spot}:${b.text}` : ''}|${thinking}`;
+      const key = `${pl.alive}|${k?.text}|${k?.ring}|${b ? `${b.spot}:${b.text}` : ''}|${thinking && thinkingText}`;
       if (el.dataset.key === key) return;
       el.dataset.key = key;
       el.className = `label ${pl.alive ? '' : 'dead'} ${i === this.me ? 'me' : ''}`;
       const parts = [
         b ? h('div', { class: `bubble ${b.spot ? 'spot' : ''}`, style: bubbleStyle(i) }, b.text) : null,
-        thinking ? h('div', { class: 'thinking' }, '...') : null,
+        thinking ? h('div', { class: 'thinking' }, thinkingText) : null,
         k && i !== this.me && !k.ring ? h('div', { class: `role-tag ${k.cls}` }, k.text) : null,
         k?.ring ? h('div', { class: `role-tag ${k.ring}` }, this.godView || this.game.state.phase === 'ended' ? ROLE_NAME[pl.role] : k.ring === 'wolf' ? '狼人' : '好人') : null,
         h('div', { class: 'plate' }, h('span', { class: `n ${k?.ring ? `ring-${k.ring}` : ''}` }, String(i + 1)), pl.name, pl.alive ? '' : ' ✝'),
