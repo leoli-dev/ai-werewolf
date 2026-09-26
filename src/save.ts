@@ -2,6 +2,7 @@ import type { LLMSnapshot } from './ai/llmAgent';
 import type { MockSnapshot } from './ai/mockAgent';
 import type { Decision, Phase, Role } from './game/types';
 import type { GamePrefs, Settings } from './settings';
+import type { Mark } from './ui/hud';
 
 /**
  * One save slot in localStorage. A game is rebuilt by dealing from the same
@@ -22,6 +23,8 @@ export interface SaveGame {
   /** Per seat: the AI's own memory (null for the human). */
   agents: (LLMSnapshot | MockSnapshot | null)[];
   elapsedMs: number;
+  /** The human's own 民/神/狼 marks per seat (older saves have none). */
+  marks?: (Mark | null)[];
   /** Shown on the title screen. */
   meta: { seat: number; role: Role; day: number; phase: Phase; alive: number };
 }

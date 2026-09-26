@@ -81,6 +81,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .roster-row .tag.god { color: var(--good); }
 .roster-row .tag.me { color: var(--gold); }
 .roster-row .status { font-size: 11px; }
+.roster-row .tag .out { margin-right: 4px; }
+/* the human's own 民/神/狼 guess: dashed, so it never reads as system info */
+.roster-row .mark { font: inherit; font-size: 11px; line-height: 1.3; min-width: 28px; padding: 0 5px; cursor: pointer; color: var(--ink-faint); background: transparent; border: 1px dashed var(--edge); }
+.roster-row .mark:hover { color: var(--ink); border-color: var(--gold); }
+.roster-row .mark.set { font-weight: 700; border-color: currentColor; }
+.roster-row .mark.good { color: var(--good); }
+.roster-row .mark.god { color: #6fb3e0; }
+.roster-row .mark.wolf { color: var(--wolf); }
 
 /* ── top banner ── */
 #banner { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 8px 20px; text-align: center; min-width: 260px; }
@@ -286,6 +294,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .msg.said .who .you { font-weight: 400; font-size: 12px; opacity: 0.75; }
 .msg.said .kind { color: inherit; border-color: currentColor; opacity: 0.7; font-weight: 400; margin-left: 4px; }
 .msg.said .kind.fallback { color: #9a2a22; opacity: 1; }
+/* the speaker's identity: solid = the system's info, dashed = the human's own mark */
+.msg.said .idtag { font-size: 11px; font-weight: 700; padding: 0 4px; margin-left: 4px; background: rgba(18, 15, 13, 0.85); color: var(--ink-dim); border: 1px solid transparent; }
+.msg.said .idtag.wolf { color: #ff7a6b; }
+.msg.said .idtag.good { color: #7fdc8f; }
+.msg.said .idtag.god { color: #8cc8f0; }
+.msg.said .idtag.me { color: var(--gold); }
+.msg.said .idtag.mark { background: rgba(255, 255, 255, 0.5); border: 1px dashed currentColor; }
+.msg.said .idtag.mark.wolf { color: #a8261a; }
+.msg.said .idtag.mark.good { color: #1f7a33; }
+.msg.said .idtag.mark.god { color: #1f5f8f; }
 .msg.said .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ───────────── phones: top bar + bottom dock, HUD and log fold into sheets ─────────────
