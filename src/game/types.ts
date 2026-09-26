@@ -12,7 +12,7 @@ export const ROLE_NAME: Record<Role, string> = {
 
 export const GOD_ROLES: Role[] = ['seer', 'witch', 'hunter', 'guard'];
 
-/** 12 人局：4 狼 / 4 民 / 预言家 女巫 猎人 守卫 */
+/** 12 人局：4 狼 / 4 民 / 预言家 女巫 猎人 守卫（预女猎守） */
 export const STANDARD_BOARD: Role[] = [
   'werewolf', 'werewolf', 'werewolf', 'werewolf',
   'villager', 'villager', 'villager', 'villager',
@@ -38,6 +38,7 @@ export type Phase =
   | 'setup'
   | 'night'
   | 'dawn'
+  | 'election'
   | 'discussion'
   | 'vote'
   | 'lastWords'
@@ -55,7 +56,11 @@ export type EventType =
   | 'private'     // private info for one player (seer result, witch info, ...)
   | 'system';     // engine/ai diagnostics
 
-export type SpeechKind = 'discussion' | 'summary' | 'lastWords' | 'defense';
+/**
+ * discussion: the day round; summary: the sheriff's closing speech (speaks last, 归票);
+ * campaign / campaignPk: 警上竞选发言 and the election's tie speech; defense: the exile vote's tie speech.
+ */
+export type SpeechKind = 'discussion' | 'summary' | 'lastWords' | 'defense' | 'campaign' | 'campaignPk';
 
 export interface GameEvent {
   seq: number;
@@ -77,7 +82,24 @@ export type TargetAction =
   | 'wolfKill'
   | 'hunterShot'
   | 'witchSave'
-  | 'witchPoison';
+  | 'witchPoison'
+  /** 上警: candidates = [self]; picking yourself runs, skipping stays 警下. */
+  | 'runForSheriff'
+  /** 退水: candidates = [self]; picking yourself withdraws. */
+  | 'withdraw'
+  /** 警长投票 (警下 players) and the election's PK revote. */
+  | 'sheriffVote'
+  | 'sheriffRevote'
+  /** 移交警徽: pick the heir, skip = 撕警徽. */
+  | 'badge'
+  /** The sheriff picks where the day's speeches start (one of two neighbours). */
+  | 'speakOrder';
+
+/** Yes/no decisions: the only candidate is the asker; picking them means "yes". */
+export const YES_NO_ACTIONS: TargetAction[] = ['runForSheriff', 'withdraw'];
+
+/** Answer to a target request with `canExplode`: the wolf self-destructs instead. */
+export const EXPLODE_CHOICE = -1;
 
 export interface SpeechRequest {
   kind: 'speech';
@@ -114,6 +136,8 @@ export interface TargetRequest {
   allowSkip: boolean;
   /** Extra context the GM tells this player (e.g. witch's death list) */
   prompt: string;
+  /** A wolf on the election stage deciding on 退水 may self-destruct instead (answer EXPLODE_CHOICE). */
+  canExplode?: boolean;
 }
 
 export type DecisionRequest = SpeechRequest | WolfChatRequest | TargetRequest;
@@ -127,6 +151,8 @@ export interface PlayerView {
   /** Roles this player legitimately knows (self, wolf teammates, seer checks). */
   known: Record<number, Role | 'good' | 'wolf'>;
   events: GameEvent[];
+  /** Current sheriff (public), null if none. */
+  sheriff: number | null;
   witch?: { hasAntidote: boolean; hasPoison: boolean };
   hunter?: { hasShot: boolean };
   guard?: { lastGuarded: number | null };

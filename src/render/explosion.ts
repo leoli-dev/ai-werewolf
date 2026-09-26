@@ -452,6 +452,25 @@ export class Explosions {
     });
   }
 
+  /** 警徽 in flight: golden twinkles trailing behind it. */
+  glint(at: THREE.Vector3) {
+    this.stars.spawn({ kind: Kind.Star, pos: at.clone().add(randomDir().multiplyScalar(0.18)), vel: randomDir().multiplyScalar(rand(0.2, 0.8)), life: rand(0.4, 0.9), size: [rand(0.35, 0.8), rand(0.1, 0.3)] });
+  }
+
+  /** 警徽 lands on its wearer: a burst of stars. */
+  starBurst(at: THREE.Vector3) {
+    for (let k = 0; k < 46; k++) {
+      this.stars.spawn({ kind: Kind.Star, pos: at, vel: randomDir().multiplyScalar(rand(1.5, 4.5)), life: rand(0.6, 1.3), size: [rand(0.4, 1), rand(0.15, 0.4)], drag: 2.2 });
+    }
+  }
+
+  /** 撕警徽: gold scraps scattering and falling. */
+  shards(at: THREE.Vector3) {
+    for (let k = 0; k < 60; k++) {
+      this.sparks.spawn({ kind: Kind.Ember, pos: at, vel: randomDir(1).multiplyScalar(rand(1.5, 5)), life: rand(0.8, 1.6), size: [0.2, 0.1], gravity: 8, drag: 0.8 });
+    }
+  }
+
   /** A puff of dust (someone drops dead where they stood). */
   puff(at: THREE.Vector3) {
     for (let k = 0; k < 40; k++) {

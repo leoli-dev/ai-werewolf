@@ -1,7 +1,9 @@
-import type { Game, GameState, NightStep, RoleCue, SceneCue } from '../game/game';
+import type { BadgeCue, Game, GameState, NightStep, RoleCue, SceneCue } from '../game/game';
 import { canSee } from '../game/game';
 import {
+  EXPLODE_CHOICE,
   ROLE_NAME,
+  YES_NO_ACTIONS,
   seat,
   teamOf,
   type Agent,
@@ -21,12 +23,12 @@ import { h } from './dom';
 import { showRules } from './rules';
 
 const ROLE_DESC: Record<Role, string> = {
-  werewolf: '每晚与狼队商量并投票杀人；白天伪装成好人。',
+  werewolf: '每晚与狼队商量并投票杀人；白天伪装成好人。屠边（神职或村民全灭）即胜。',
   villager: '没有技能，靠发言与投票找出狼人。',
-  seer: '每晚查验一人的具体身份。',
-  witch: '金水救人、银水毒人，各一瓶。',
-  hunter: '整局一枪：夜里或出局时可带走一人。',
-  guard: '每晚守护一人免受狼刀，不可连守。',
+  seer: '每晚查验一人是好人还是狼人。',
+  witch: '金水救人、银水毒人，各一瓶；同一晚只能用一瓶，仅首夜可自救。',
+  hunter: '出局时可开枪带走一人；被毒死不能开枪。',
+  guard: '每晚守护一人免受狼刀，可守自己，不可连守。',
 };
 
 const ACTION_TITLE: Record<TargetRequest['action'], string> = {
@@ -38,9 +40,19 @@ const ACTION_TITLE: Record<TargetRequest['action'], string> = {
   hunterShot: '猎人 · 开枪',
   witchSave: '女巫 · 金水',
   witchPoison: '女巫 · 银水',
+  runForSheriff: '警长竞选 · 是否上警',
+  withdraw: '警长竞选 · 是否退水',
+  sheriffVote: '警长投票',
+  sheriffRevote: '警长 PK 再投',
+  badge: '警长 · 移交警徽',
+  speakOrder: '警长 · 决定发言顺序',
 };
 
-type Tab = 'round' | 'all' | 'wolf' | 'private';
+const SPEECH_KIND: Record<string, string> = {
+  discussion: '', summary: '警长归票', lastWords: '遗言', defense: 'PK', campaign: '警上', campaignPk: '警长PK',
+};
+
+type Tab = 'round' | 'election' | 'all' | 'wolf' | 'private';
 
 /** Phone-sized screens (portrait, or a landscape phone): the HUD folds into a bottom dock + sheets. */
 const MOBILE = window.matchMedia('(max-width: 760px), (max-height: 520px)');
@@ -83,8 +95,8 @@ function bubbleStyle(id: number) {
 
 /** Public night-step names (GM announces the turn, never what the role does). */
 const NIGHT_STEP_NAME: Record<NightStep, string> = {
-  seer: '预言家轮',
   guard: '守卫轮',
+  seer: '预言家轮',
   wolves: '狼人轮',
   hunter: '猎人轮',
   witch: '女巫轮',
@@ -186,7 +198,7 @@ export class GameUI {
     if (id === this.me) return { text: ROLE_NAME[p.role], cls: 'me', ring };
     // a wolf you checked as the seer is a check result, not a teammate
     if (k === 'werewolf' && this.game.players[this.me].role === 'werewolf') return { text: '狼队友', cls: 'wolf' };
-    if (ring) return { text: `查验：${ROLE_NAME[this.game.state.seerChecks[id]]}`, cls: roleCls(this.game.state.seerChecks[id]!), ring };
+    if (ring) return { text: `查验：${ring === 'wolf' ? '狼人' : '好人'}`, cls: ring, ring };
     return null;
   }
 
@@ -194,7 +206,7 @@ export class GameUI {
     const me = this.game.players[this.me];
     if (me.role !== 'seer' && !this.godView) return undefined;
     const r = this.game.state.seerChecks[id];
-    return r ? (teamOf(r) === 'wolf' ? 'wolf' : 'good') : undefined;
+    return r;
   }
 
   // ───────────────────────── build ─────────────────────────
@@ -453,8 +465,9 @@ export class GameUI {
     return new Promise((resolve) => {
       const p = this.game.players[info.player];
       const KIND: Record<string, string> = {
-        discussion: '发言', summary: '总结', lastWords: '遗言', defense: '正名', vote: '投票', revote: '再投',
+        discussion: '发言', summary: '警长归票', lastWords: '遗言', defense: 'PK发言', vote: '投票', revote: 'PK再投',
         wolfChat: '狼队沟通', wolfKill: '狼队投票', seer: '查验', guard: '守护', hunterShot: '开枪', witchSave: '救人', witchPoison: '用毒',
+        campaign: '警上发言', campaignPk: '警长PK发言', runForSheriff: '上警', withdraw: '退水', sheriffVote: '警长投票', sheriffRevote: '警长PK再投', badge: '移交警徽', speakOrder: '决定发言顺序',
       };
       // never reveal who acts at night (would leak roles)
       const secret = this.game.state.phase === 'night' && !this.godView;
@@ -520,11 +533,11 @@ export class GameUI {
       else if (e.data!.cause === 'explode') this.blast = this.stage.exploded(id);
       else this.stage.killed(id);
     }
-    if (e.type === 'gm' && e.text.startsWith('天亮了')) {
-      // the rooster crows first, then the GM's verdict sting
-      audio.rooster();
-      const peaceful = e.text.includes('平安夜');
-      setTimeout(() => (peaceful ? audio.peaceful() : audio.death()), 2600);
+    if (e.type === 'gm' && e.text.includes('天亮了')) audio.rooster();
+    // the GM's verdict sting on the night's news (after the election on day 1)
+    if (e.type === 'gm' && Array.isArray(e.data?.nightDeaths)) {
+      if ((e.data.nightDeaths as number[]).length) audio.death();
+      else audio.peaceful();
     }
     if (!this.canSee(e)) return;
     if (e.type === 'speech') {
@@ -544,7 +557,7 @@ export class GameUI {
     if ((e.type === 'speech' || e.type === 'wolfChat') && e.speaker !== undefined) {
       // every speaker keeps their latest words over their head (day: until everyone
       // goes home at nightfall; wolf chat: until the pack is back indoors)
-      const spot = e.speechKind === 'defense' || e.speechKind === 'lastWords';
+      const spot = e.speechKind === 'defense' || e.speechKind === 'lastWords' || e.speechKind === 'campaignPk';
       this.bubbles.set(e.speaker, { text: e.text, seq: ++this.bubbleSeq, spot });
     }
   }
@@ -583,6 +596,7 @@ export class GameUI {
       }
     }
     this.stage.restore({ dead, exiled, exploded, indoors: night, wolves: this.wolvesShown, night, guarded, darkened });
+    this.stage.setBadge(s.sheriff);
     this.onState(s);
     this.renderTabs();
   }
@@ -602,6 +616,7 @@ export class GameUI {
       setup: '准备中',
       night: `第 ${s.day} 夜`,
       dawn: `第 ${s.day} 天 · 天亮`,
+      election: `第 ${s.day} 天 · 警长竞选`,
       discussion: `第 ${s.day} 天 · 发言`,
       vote: `第 ${s.day} 天 · 投票`,
       lastWords: `第 ${s.day} 天 · 遗言`,
@@ -650,8 +665,12 @@ export class GameUI {
     }
     const phaseKey = `${s.day}:${s.phase}`;
     if (phaseKey !== this.lastPhase) {
+      const wasElection = this.lastPhase.endsWith(':election');
       this.lastPhase = phaseKey;
-      if (s.phase === 'night' || s.phase === 'dawn') this.renderTabs();
+      // the election has its own record: follow it while it runs, then back to the day's
+      if (s.phase === 'election' && this.tab === 'round') this.tab = 'election';
+      else if (wasElection && this.tab === 'election') this.tab = 'round';
+      this.renderTabs();
     }
     this.renderRoster();
     this.renderItems();
@@ -692,7 +711,7 @@ export class GameUI {
   /** night ↔ day: wipe leftover bubbles from the previous part of the round
    * (the wolf-chat bubbles are their own scope, gone once the wolf turn ends). */
   private scopeBubbles(s: GameState) {
-    const bubbleScope = `${s.day}:${s.phase === 'night' ? `night:${s.nightStep === 'wolves' ? 'wolves' : ''}` : 'day'}`;
+    const bubbleScope = `${s.day}:${s.phase === 'night' ? `night:${s.nightStep === 'wolves' ? 'wolves' : ''}` : s.phase === 'election' ? 'election' : 'day'}`;
     if (bubbleScope !== this.bubbleScope) {
       this.bubbleScope = bubbleScope;
       this.bubbles.clear();
@@ -704,7 +723,7 @@ export class GameUI {
    * the pack is back indoors). Capped so a hidden tab (paused rAF) never stalls the game.
    */
   cue(c: SceneCue): Promise<void> {
-    if (typeof c === 'object') return this.roleCue(c);
+    if (typeof c === 'object') return c.kind === 'badge' ? this.badgeCue(c) : this.roleCue(c);
     const iSeeWolves = this.game.players[this.me].role === 'werewolf' || this.godView;
     let job: Promise<void> = Promise.resolve();
     switch (c) {
@@ -742,6 +761,12 @@ export class GameUI {
     return Promise.race([job, new Promise<void>((r) => setTimeout(r, c === 'wolvesIn' ? 40000 : 12000))]);
   }
 
+  /** The badge flies to the new sheriff / heir, or is torn up: everyone sees it. */
+  private badgeCue(c: BadgeCue): Promise<void> {
+    if (c.to !== null) this.stage.focus(c.to);
+    return Promise.race([this.stage.moveBadge(c.from, c.to), new Promise<void>((r) => setTimeout(r, 12000))]);
+  }
+
   /**
    * A night role's action plays out only for the player who took it (or god view);
    * for anyone else it resolves at once, so its length gives nothing away. The
@@ -764,9 +789,6 @@ export class GameUI {
       case 'witchSave':
         job = this.stage.witchSave(c.target, home);
         break;
-      case 'nightShot':
-        job = this.stage.nightShot(c.target, home);
-        break;
       case 'dayShot':
         job = this.stage.dayShot(c.target);
         break;
@@ -787,6 +809,7 @@ export class GameUI {
     }
     if (me.role === 'hunter') chips.push(h('span', { class: `chip ${s.hunterShot ? 'used' : ''}` }, '猎枪 ×1'));
     if (me.role === 'guard' && s.lastGuarded !== null) chips.push(h('span', { class: 'chip' }, `昨夜守护 ${seat(s.lastGuarded)}`));
+    if (s.sheriff === this.me) chips.push(h('span', { class: 'chip sheriff' }, '★ 警长'));
     if (!me.alive) chips.push(h('span', { class: 'chip used' }, '已出局'));
     items.replaceChildren(...chips);
   }
@@ -824,7 +847,7 @@ export class GameUI {
           onclick: () => this.pick(p.id),
         },
         num,
-        h('span', { class: 'name' }, p.name, p.id === this.me ? '（你）' : ''),
+        h('span', { class: 'name' }, p.name, p.id === this.me ? '（你）' : '', this.game.state.sheriff === p.id ? h('span', { class: 'star', title: '警长' }, ' ★警长') : ''),
         h('span', { class: `tag ${k?.cls ?? ''}` }, k?.text ?? (p.alive ? '' : '出局')),
       );
       return row;
@@ -848,7 +871,10 @@ export class GameUI {
 
   private renderTabs() {
     const me = this.game.players[this.me];
-    const tabs: [Tab, string][] = [['round', '本轮'], ['all', '全部']];
+    const tabs: [Tab, string][] = [['round', '本轮']];
+    // 警长竞选 keeps its own shared record, from the moment it starts
+    if (this.game.state.phase === 'election' || this.game.events.some((e) => e.phase === 'election')) tabs.push(['election', '警长竞选']);
+    tabs.push(['all', '全部']);
     if (me.role === 'werewolf' || this.godView) tabs.push(['wolf', '狼队频道']);
     tabs.push(['private', '私密信息']);
     this.chatTabs.replaceChildren(
@@ -864,7 +890,9 @@ export class GameUI {
     if (this.playerFilter !== null && e.speaker !== this.playerFilter) return false;
     switch (this.tab) {
       case 'round':
-        return e.day === this.game.state.day && e.type !== 'system';
+        return e.day === this.game.state.day && e.type !== 'system' && e.phase !== 'election';
+      case 'election':
+        return e.phase === 'election' && e.type !== 'system';
       case 'all':
         return e.type !== 'system';
       case 'wolf':
@@ -904,7 +932,7 @@ export class GameUI {
       );
     switch (e.type) {
       case 'speech': {
-        const kind = e.data?.explode ? '自爆' : { discussion: '', summary: '总结', lastWords: '遗言', defense: '正名' }[e.speechKind ?? 'discussion'];
+        const kind = e.data?.explode ? '自爆' : SPEECH_KIND[e.speechKind ?? 'discussion'];
         const fb = e.data?.fallback ? h('span', { class: 'kind fallback', title: '模型调用失败，由规则 AI 代发' }, '规则AI代打') : null;
         el = said(e.speaker!, '', kind ? h('span', { class: 'kind' }, kind) : null, fb);
         el.append(h('div', { class: 'text' }, e.text));
@@ -953,7 +981,7 @@ export class GameUI {
         b ? h('div', { class: `bubble ${b.spot ? 'spot' : ''}`, style: bubbleStyle(i) }, b.text) : null,
         thinking ? h('div', { class: 'thinking' }, '...') : null,
         k && i !== this.me && !k.ring ? h('div', { class: `role-tag ${k.cls}` }, k.text) : null,
-        k?.ring ? h('div', { class: `role-tag ${k.ring}` }, ROLE_NAME[this.game.state.seerChecks[i] ?? pl.role]) : null,
+        k?.ring ? h('div', { class: `role-tag ${k.ring}` }, this.godView || this.game.state.phase === 'ended' ? ROLE_NAME[pl.role] : k.ring === 'wolf' ? '狼人' : '好人') : null,
         h('div', { class: 'plate' }, h('span', { class: `n ${k?.ring ? `ring-${k.ring}` : ''}` }, String(i + 1)), pl.name, pl.alive ? '' : ' ✝'),
       ];
       el.replaceChildren(...parts.filter((x): x is HTMLDivElement => x !== null));
@@ -979,15 +1007,17 @@ export class GameUI {
       const title =
         req.kind === 'wolfChat'
           ? `狼队频道 · 第 ${req.round}/${req.rounds} 轮`
-          : { discussion: '轮到你发言', summary: '归纳总结（首位发言人）', lastWords: '你的遗言', defense: '平票正名' }[req.purpose];
+          : { discussion: '轮到你发言', summary: '警长发言 · 归票', lastWords: '你的遗言', defense: '放逐 PK 发言', campaign: '警上竞选发言', campaignPk: '警长 PK 发言' }[req.purpose];
       const hint =
         req.kind === 'wolfChat'
           ? req.othersPassed
             ? '队友们都表示没有补充。你还想说什么就写下来，队友会在下一轮回应；否则直接开始投票。'
             : '只有狼队友能看到。和队友商量刀谁、白天怎么配合；没有补充可直接点「过」。'
           : req.purpose === 'summary'
-            ? '所有人都已发言。梳理大家的站边与矛盾，给出建议的放逐对象。'
-            : '在这里输入你想对全镇说的话。可以提到「N号」。';
+            ? '你是警长，所有人都已发言。梳理大家的站边与矛盾，点出你建议大家放逐的号码（归票）。'
+            : req.purpose === 'campaign'
+              ? '说说你为什么要当警长。预言家一般在这里报查验，并留警徽流（今晚验谁、明晚验谁）。昨晚死讯还没公布。'
+              : '在这里输入你想对全镇说的话。可以提到「N号」。';
       const ta = h('textarea', { placeholder: req.kind === 'wolfChat' ? '例：今晚刀 5 号，他像预言家…' : '例：我是好人，3 号发言前后矛盾…', maxlength: '400' }) as HTMLTextAreaElement;
       const count = h('span', { class: 'count' }, '0 / 400');
       ta.oninput = () => (count.textContent = `${ta.value.length} / 400`);
@@ -1061,8 +1091,10 @@ export class GameUI {
           return b;
         }),
       );
+      if (YES_NO_ACTIONS.includes(req.action)) return this.askYesNo(req, finish);
       const skipLabel: Partial<Record<TargetRequest['action'], string>> = {
         vote: '弃票', revote: '弃票', guard: '空守', hunterShot: '不开枪', witchSave: '不救', witchPoison: '不用毒',
+        wolfKill: '空刀', sheriffVote: '弃票', sheriffRevote: '弃票', badge: '撕掉警徽',
       };
       this.open(
         h('div', { class: 'title' }, ACTION_TITLE[req.action]),
@@ -1072,6 +1104,34 @@ export class GameUI {
       );
       this.pendingTarget = { req, select };
     });
+  }
+
+  /** 上警 / 退水: two buttons (and, for a wolf on the stage, 自爆 behind a confirm click). */
+  private askYesNo(req: TargetRequest, finish: (v: number | null) => void) {
+    const [yes, no] = req.action === 'runForSheriff' ? ['上警', '不上警'] : ['退水', '继续竞选'];
+    let armed = false;
+    const explodeBtn = req.canExplode
+      ? (h('button', {
+          class: 'btn danger',
+          title: '公开狼人身份并立即出局（无遗言）；警长竞选推迟到明天，今天直接天黑。',
+          onclick: () => {
+            if (armed) return finish(EXPLODE_CHOICE);
+            armed = true;
+            explodeBtn!.textContent = '确认自爆？';
+          },
+        }, '自爆') as HTMLButtonElement)
+      : null;
+    this.open(
+      h('div', { class: 'title' }, ACTION_TITLE[req.action]),
+      h('div', { class: 'hint' }, req.prompt),
+      h(
+        'div',
+        { class: 'row' },
+        explodeBtn,
+        h('button', { class: 'btn', onclick: () => finish(null) }, no),
+        h('button', { class: 'btn primary', onclick: () => finish(this.me) }, yes),
+      ),
+    );
   }
 
   // ───────────────────────── end ─────────────────────────

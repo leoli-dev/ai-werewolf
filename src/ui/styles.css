@@ -62,6 +62,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .role-card .items { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .chip { font-size: 11px; padding: 1px 6px; border: 1px solid var(--edge); background: #221b15; }
 .chip.used { opacity: 0.4; text-decoration: line-through; }
+.chip.sheriff { color: #ffd24a; border-color: #b8801c; }
 
 .roster { padding: 6px; overflow-y: auto; }
 .roster-row { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px; padding: 4px 6px; cursor: pointer; border: 1px solid transparent; }
@@ -74,6 +75,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .roster-row .num.ring-good { border-color: var(--good); box-shadow: 0 0 6px var(--good); }
 .roster-row .num.ring-wolf { border-color: var(--wolf); box-shadow: 0 0 6px var(--wolf); }
 .roster-row .name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roster-row .name .star { color: #ffd24a; font-size: 11px; }
 .roster-row .tag { font-size: 11px; color: var(--ink-dim); }
 .roster-row .tag.wolf { color: var(--wolf); }
 .roster-row .tag.god { color: var(--good); }

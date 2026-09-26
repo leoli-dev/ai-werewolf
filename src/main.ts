@@ -135,7 +135,7 @@ async function play(settings: Settings, save?: SaveGame) {
   const snapshot = (): SaveGame => {
     const s = game.state;
     return {
-      v: 1,
+      v: 2,
       savedAt: Date.now(),
       prefs,
       setupSeed,

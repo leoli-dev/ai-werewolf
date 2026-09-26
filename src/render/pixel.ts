@@ -684,3 +684,40 @@ export function angelSheet(): HTMLCanvasElement {
   });
   return sheet(frames);
 }
+
+/**
+ * 警徽: a round gold badge with a five-pointed star, dark rim, a glint top-left.
+ * Drawn per pixel on a 16×16 grid.
+ */
+export function badgeCanvas(): HTMLCanvasElement {
+  const [c, ctx] = canvas(16, 16);
+  const star: [number, number][] = [];
+  for (let k = 0; k < 10; k++) {
+    const a = -Math.PI / 2 + (k * Math.PI) / 5;
+    const r = k % 2 ? 2.4 : 5.6;
+    star.push([7.5 + Math.cos(a) * r, 7.5 + Math.sin(a) * r]);
+  }
+  const inStar = (x: number, y: number) => {
+    let inside = false;
+    for (let i = 0, j = star.length - 1; i < star.length; j = i++) {
+      const [xi, yi] = star[i];
+      const [xj, yj] = star[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      if (d > 7.6) continue;
+      let col = d > 6.6 ? '#6a4208' : d > 5.9 ? '#f2c14e' : '#b8801c';
+      if (d <= 5.9 && inStar(x + 0.5, y + 0.5)) col = x + y < 14 ? '#fff2b0' : '#ffd24a';
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(4, 3, 2, 1);
+  ctx.fillRect(3, 4, 1, 2);
+  return c;
+}

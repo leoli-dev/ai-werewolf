@@ -11,7 +11,7 @@ import { Shield } from './shield';
 import { Spring } from './spring';
 import { HouseSkin, Magic, Reticle } from './magic';
 import { PERSONAS } from '../personas';
-import { characterSheet, graveCanvas, pixelTexture, setFrame, sheetTexture, werewolfSheet, type Look } from './pixel';
+import { badgeCanvas, characterSheet, graveCanvas, pixelTexture, setFrame, sheetTexture, werewolfSheet, type Look } from './pixel';
 import { EXIT_PATH, billboardSprite, buildTown, seatAngle, seatPosition, type HouseRefs, type TownRefs } from './town';
 
 /** Separable tilt-shift blur: sharp band around `focus` (0..1 screen y), blur grows away from it. */
@@ -72,6 +72,9 @@ const GradeShader = {
       gl_FragColor = c;
     }`,
 };
+
+/** Height of the sheriff's badge over its wearer's feet (just above the head). */
+const BADGE_Y = 2.35;
 
 interface Actor {
   id: number;
@@ -184,6 +187,11 @@ export class Stage {
   private actors: Actor[] = [];
   private billboards: THREE.Object3D[] = [];
   private focusRing: THREE.Mesh;
+  /** 警徽: worn over the sheriff's head by day. */
+  private badge: THREE.Mesh;
+  private badgeHolder: number | null = null;
+  /** The badge is flying / being torn up: `frame` leaves its position alone. */
+  private badgeBusy = false;
   private focusLight: THREE.SpotLight;
   private timer = new THREE.Timer();
   /** Scene time; stands still while paused. */
@@ -257,6 +265,14 @@ export class Stage {
     this.animals.onFlap = (p) => this.sounds?.flap(this.falloff(p));
     this.animals.onCaw = (p) => this.sounds?.caw(this.falloff(p) * 0.7);
     this.atmo.onStrike = (d) => this.sounds?.thunder(d);
+
+    this.badge = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.8, 0.8),
+      new THREE.MeshBasicMaterial({ map: pixelTexture(badgeCanvas()), alphaTest: 0.5, side: THREE.DoubleSide, fog: false }),
+    );
+    this.badge.visible = false;
+    this.scene.add(this.badge);
+    this.billboards.push(this.badge);
 
     this.focusRing = new THREE.Mesh(
       new THREE.RingGeometry(0.55, 0.75, 24),
@@ -722,24 +738,6 @@ export class Stage {
     return true;
   }
 
-  /** 猎人夜里开枪: aim at the house, fire; a cry inside, the lights go out. */
-  async nightShot(id: number, me: number): Promise<void> {
-    const epoch = this.epoch;
-    const h = this.town.houses[id];
-    const ok = () => epoch === this.epoch;
-    this.frameHouse(id, { dist: 20, pitch: 0.34, yaw: 0.2 });
-    await this.wait(1.1);
-    if (!ok()) return;
-    const pane = h.group.localToWorld(new THREE.Vector3(0, h.size.h * 0.6, h.size.d / 2));
-    if (!(await this.takeAim(pane, ok))) return;
-    await this.wait(0.35);
-    this.sounds?.hit(this.falloff(h.doorstep));
-    await this.lightsOut(h);
-    await this.wait(1.2);
-    if (!ok()) return;
-    await this.goHome(me);
-  }
-
   /** 猎人白天开枪 (seen by everyone): aim at the player, fire; they drop and a grave takes their place. */
   async dayShot(id: number): Promise<void> {
     const epoch = this.epoch;
@@ -842,6 +840,83 @@ export class Stage {
       }
       a.sprite.visible = false;
     })();
+  }
+
+  // ── 警徽 ──
+
+  /** Where the badge sits on `id`: over the head, or over the grave once they are dead. */
+  private badgeSpot(id: number): THREE.Vector3 {
+    const a = this.actors[id];
+    return (this.anchor(a) ?? a.base).clone().setY(a.status === 'dead' ? 1.5 : BADGE_Y);
+  }
+
+  /** Put the badge on `id` at once (a resumed game). */
+  setBadge(id: number | null) {
+    this.badgeHolder = id;
+    this.badgeBusy = false;
+  }
+
+  /**
+   * The badge moves. Elected (`from` null): it drops out of the sky over the well and
+   * flies, spinning and trailing stars, onto the new sheriff's head. Handed on: it
+   * flies from the dead sheriff's grave to the heir. Torn up (`to` null): it shakes
+   * and bursts into falling gold scraps.
+   */
+  async moveBadge(from: number | null, to: number | null): Promise<void> {
+    const epoch = this.epoch;
+    const ok = () => epoch === this.epoch;
+    const b = this.badge;
+    if (to === null) {
+      this.badgeHolder = null;
+      if (from === null) return;
+      const at = this.badgeSpot(from);
+      this.badgeBusy = true;
+      b.visible = true;
+      b.position.copy(at);
+      this.shot = { target: at.clone().setY(1.4), until: this.time + 3.5, dist: 16, band: 0.3 };
+      await this.tween(1, (k) => {
+        if (!ok()) return;
+        b.position.set(at.x + Math.sin(k * 60) * 0.06 * k, at.y + k * 0.5, at.z);
+        b.scale.setScalar(1 + k * 0.4);
+      });
+      if (!ok()) return;
+      this.fx.shards(b.position.clone());
+      this.fx.flash = Math.max(this.fx.flash, 0.2);
+      this.sounds?.doorBreak(0.45);
+      b.visible = false;
+      b.scale.set(1, 1, 1);
+      this.badgeBusy = false;
+      await this.wait(1.2);
+      return;
+    }
+    const start = from === null ? new THREE.Vector3(0, 12, 0) : this.badgeSpot(from);
+    const end0 = this.badgeSpot(to);
+    this.badgeHolder = null;
+    this.badgeBusy = true;
+    b.visible = true;
+    b.position.copy(start);
+    const dur = from === null ? 2.6 : 2.2;
+    this.shot = { target: start.clone().lerp(end0, 0.6).setY(2.5), until: this.time + dur + 1.6, dist: from === null ? 26 : 22, band: 0.45 };
+    this.sounds?.sparkle(1);
+    const p = new THREE.Vector3();
+    await this.tween(dur, (k) => {
+      if (!ok()) return;
+      const e = k * k * (3 - 2 * k);
+      p.lerpVectors(start, this.badgeSpot(to), e);
+      p.y += Math.sin(Math.PI * e) * (from === null ? 1.5 : 3);
+      b.position.copy(p);
+      // a coin spinning in the air, bigger while it is high up
+      b.scale.set(Math.cos(k * Math.PI * 7) * (1 + (1 - k) * 0.7), 1 + (1 - k) * 0.7, 1);
+      this.fx.glint(p);
+    });
+    if (!ok()) return;
+    b.scale.set(1, 1, 1);
+    this.fx.starBurst(this.badgeSpot(to));
+    this.fx.flash = Math.max(this.fx.flash, 0.25);
+    this.sounds?.bell(1);
+    this.badgeHolder = to;
+    this.badgeBusy = false;
+    await this.wait(1.4);
   }
 
   // ── endings ──
@@ -1002,6 +1077,10 @@ export class Stage {
 
   resetAll() {
     this.epoch++;
+    this.badgeHolder = null;
+    this.badgeBusy = false;
+    this.badge.visible = false;
+    this.badge.scale.set(1, 1, 1);
     this.ending = null;
     this.dance = 0;
     this.atmo.clear = 0;
@@ -1330,6 +1409,14 @@ export class Stage {
       }
     }
 
+    // the sheriff wears the badge by day (at night everyone is indoors)
+    if (!this.badgeBusy) {
+      const a = this.badgeHolder !== null ? this.actors[this.badgeHolder] : null;
+      const show = !!a && a.status === 'alive' && a.sprite.visible && n < 0.5 && this.ending !== 'wolf';
+      this.badge.visible = show;
+      if (show) this.badge.position.copy(a!.sprite.position).setY(BADGE_Y + Math.sin(t * 2.2 + a!.phase) * 0.05);
+    }
+
     // camera
     const focusedActor = this.focusId !== null ? this.actors[this.focusId] : null;
     const focusPos = focusedActor ? this.anchor(focusedActor) : null;
@@ -1423,7 +1510,8 @@ export class Stage {
       const out: ScreenPos[] = this.actors.map((a) => {
         const anchor = this.anchor(a);
         if (!anchor) return { x: 0, y: 0, visible: false };
-        const height = a.wolf.visible ? 2.7 : a.status === 'dead' ? 1.3 : 2.25;
+        const badged = this.badge.visible && !this.badgeBusy && this.badgeHolder === a.id;
+        const height = a.wolf.visible ? 2.7 : a.status === 'dead' ? 1.3 : badged ? 2.8 : 2.25;
         const p = anchor.clone().setY(height).project(this.camera);
         return {
           x: rect.left + ((p.x + 1) / 2) * rect.width,
