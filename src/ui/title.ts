@@ -7,6 +7,7 @@ export const PHASE_NAME: Record<Phase, (day: number) => string> = {
   setup: () => '开局',
   night: (d) => `第 ${d} 夜`,
   dawn: (d) => `第 ${d} 天 · 天亮`,
+  election: (d) => `第 ${d} 天 · 警长竞选`,
   discussion: (d) => `第 ${d} 天 · 发言`,
   vote: (d) => `第 ${d} 天 · 投票`,
   lastWords: (d) => `第 ${d} 天 · 遗言`,

@@ -1,5 +1,5 @@
 import { Rng } from '../game/rng';
-import { ROLE_NAME, seat, type Agent, type Role, type PlayerView, type SpeechRequest, type SpeechResult, type TargetRequest, type WolfChatRequest } from '../game/types';
+import { EXPLODE_CHOICE, seat, type Agent, type PlayerView, type SpeechRequest, type SpeechResult, type TargetRequest, type WolfChatRequest } from '../game/types';
 
 export interface MockSnapshot {
   rng: number;
@@ -78,13 +78,18 @@ export class MockAgent implements Agent {
     this.suspicion.set(target, (this.suspicion.get(target) ?? 0) + 1);
     if (req.purpose === 'lastWords') return `我是好人，大家多注意 ${seat(target)}。`;
     if (req.purpose === 'defense') return '我真的是好人，请大家相信我，别投错了。';
-    if (req.purpose === 'summary') return `听完一轮，我觉得 ${seat(target)} 最可疑，建议集中投他。`;
+    if (req.purpose === 'campaignPk') return '警徽给我，我能带好人把狼找出来。';
+    if (req.purpose === 'summary') return `我是警长，听完一轮，我觉得 ${seat(target)} 最可疑，归票 ${seat(target)}。`;
     if (v.self.role === 'seer') {
       const checks = Object.entries(v.known).filter(([id]) => Number(id) !== v.self.id);
       if (checks.length) {
-        return `我是预言家，${checks.map(([id, t]) => `${seat(Number(id))}是${ROLE_NAME[t as Role] ?? t}`).join('，')}。`;
+        const said = `我是预言家，${checks.map(([id, t]) => `${t === 'wolf' ? '查杀' : '金水'} ${seat(Number(id))}`).join('，')}。`;
+        if (req.purpose !== 'campaign') return said;
+        const flow = others.filter((o) => !(o in v.known)).slice(0, 2);
+        return `${said}警徽流：${flow.map(seat).join('、')}。`;
       }
     }
+    if (req.purpose === 'campaign') return `我上警是想拿警徽带队，目前我比较怀疑 ${seat(target)}。`;
     const lines = [
       `我是好人，${seat(target)} 发言有点奇怪。`,
       `目前信息不多，先听听大家，我暂时怀疑 ${seat(target)}。`,
@@ -97,6 +102,35 @@ export class MockAgent implements Agent {
     await this.wait();
     const c = req.candidates;
     switch (req.action) {
+      case 'runForSheriff':
+        return v.self.role === 'seer' || this.rng.next() < 0.3 ? v.self.id : null;
+      case 'withdraw':
+        if (req.canExplode && this.cornered(v)) return EXPLODE_CHOICE;
+        return v.self.role !== 'seer' && this.rng.next() < 0.25 ? v.self.id : null;
+      case 'sheriffVote':
+      case 'sheriffRevote': {
+        // back a claimed seer / a checked-good candidate, else whoever looks least suspicious
+        const trusted = c.filter((x) => v.known[x] === 'good' || (!this.isWolf(v) && claimsSeer(v, x)));
+        if (trusted.length) return this.rng.pick(trusted);
+        if (this.isWolf(v)) {
+          const mates = c.filter((x) => v.known[x] === 'werewolf');
+          if (mates.length) return this.rng.pick(mates);
+        }
+        return c.reduce((best, x) => ((this.suspicion.get(x) ?? 0) < (this.suspicion.get(best) ?? 0) ? x : best), c[0]);
+      }
+      case 'badge': {
+        // 警徽流: the seer hands it to the latest player checked good; a wolf passes it to a teammate
+        const checks = v.events.filter((e) => e.data?.result === 'good' && c.includes(e.data.check as number));
+        if (checks.length) return checks[checks.length - 1].data!.check as number;
+        if (this.isWolf(v)) {
+          const mates = c.filter((x) => v.known[x] === 'werewolf');
+          return mates.length ? this.rng.pick(mates) : null;
+        }
+        const calm = c.filter((x) => (this.suspicion.get(x) ?? 0) === 0);
+        return calm.length ? this.rng.pick(calm) : null;
+      }
+      case 'speakOrder':
+        return this.rng.pick(c);
       case 'wolfKill': {
         const nonWolf = c.filter((x) => v.known[x] !== 'werewolf');
         return this.rng.pick(nonWolf.length ? nonWolf : c);
@@ -111,7 +145,7 @@ export class MockAgent implements Agent {
         return v.day > 1 && wolf.length && this.rng.next() < 0.5 ? this.rng.pick(wolf) : null;
       }
       case 'hunterShot':
-        return v.self.alive && this.rng.next() < 0.8 ? null : this.suspect(v, c);
+        return this.suspect(v, c);
       case 'vote':
       case 'revote': {
         if (this.isWolf(v)) {
@@ -123,4 +157,9 @@ export class MockAgent implements Agent {
     }
     return null;
   }
+}
+
+/** Has `id` claimed seer in a public speech? */
+function claimsSeer(v: PlayerView, id: number): boolean {
+  return v.events.some((e) => e.type === 'speech' && e.speaker === id && /我是预言家/.test(e.text));
 }

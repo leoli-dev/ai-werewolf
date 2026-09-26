@@ -1,5 +1,10 @@
 import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, WolfChatRequest } from '../game/types';
-import { seat } from '../game/types';
+import { EXPLODE_CHOICE, YES_NO_ACTIONS, seat, type TargetAction } from '../game/types';
+
+const NOTE_TAG: Record<TargetAction, string> = {
+  vote: '投票', revote: 'PK再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', witchSave: '救', witchPoison: '毒',
+  runForSheriff: '上警', withdraw: '退水', sheriffVote: '警长投票', sheriffRevote: '警长PK再投', badge: '移交警徽', speakOrder: '发言顺序从',
+};
 import { MockAgent, type MockSnapshot } from './mockAgent';
 import { cleanSpeech, parseExplode, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
 import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
@@ -52,6 +57,7 @@ export class LLMAgent implements Agent {
   }
 
   private messages(view: PlayerView, task: string): ChatMessage[] {
+    const election = sharedNotebook(view, { election: true });
     return [
       { role: 'system', content: systemPrompt(view, this.persona) },
       {
@@ -59,6 +65,7 @@ export class LLMAgent implements Agent {
         content: [
           `【你的私人记录本（只有你知道，不是公开信息）】\n${privateNotebook(view, this.notes)}`,
           `【共享发言记录本 · 之前几天】\n${sharedNotebook(view, { before: view.day })}`,
+          `【警长竞选记录（上警、警上发言、退水、警长投票）】\n${election}`,
           `【今天的发言（第 ${view.day} 天，按顺序）】\n${sharedNotebook(view, { onlyDay: view.day })}`,
           `【当前任务】\n${task}`,
         ].join('\n\n'),
@@ -141,8 +148,10 @@ export class LLMAgent implements Agent {
         if (await this.shouldRetry(req.action, `模型给出的目标不在可选号码内或无法解析：${raw.slice(0, 80)}`)) continue;
         return this.fallback.choose(req, view);
       }
-      const tag = { vote: '投票', revote: '再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', witchSave: '救', witchPoison: '毒' }[req.action];
-      this.notes.push(`第${req.day}${['vote', 'revote'].includes(req.action) ? '天' : '夜'}${tag}${target === null ? '：放弃' : ` ${seat(target)}`}${reason ? `（${reason}）` : ''}`);
+      const tag = NOTE_TAG[req.action];
+      const night = ['seer', 'guard', 'wolfKill', 'witchSave', 'witchPoison'].includes(req.action);
+      const what = YES_NO_ACTIONS.includes(req.action) ? (target === EXPLODE_CHOICE ? '：自爆' : target === null ? '：否' : '：是') : target === null ? '：放弃' : ` ${seat(target)}`;
+      this.notes.push(`第${req.day}${night ? '夜' : '天'}${tag}${what}${reason ? `（${reason}）` : ''}`);
       if (this.notes.length > 40) this.notes.splice(0, this.notes.length - 40);
       return target;
     }

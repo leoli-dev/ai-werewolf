@@ -21,6 +21,14 @@ describe('parseTarget', () => {
     expect(parseTarget('我决定 target: 3', req([2, 5])).target).toBe(2);
     expect(parseTarget('我投 6 号', req([5, 7])).target).toBe(5);
     expect(parseTarget('我选择不开枪', req([1, 2])).target).toBeNull();
+    expect(parseTarget('撕掉警徽', req([1, 2])).target).toBeNull();
+  });
+  it('reads yes/no answers and a wolf\'s -1 (自爆) only when allowed', () => {
+    const withdraw = (canExplode: boolean): TargetRequest => ({ kind: 'target', action: 'withdraw', day: 1, candidates: [4], allowSkip: true, prompt: '', canExplode });
+    expect(parseTarget('{"target": 5}', withdraw(false)).target).toBe(4);
+    expect(parseTarget('{"target": 0}', withdraw(false)).target).toBeNull();
+    expect(parseTarget('{"target": -1}', withdraw(true)).target).toBe(-1);
+    expect(parseTarget('{"target": -1}', withdraw(false)).target).toBeUndefined();
   });
 });
 
@@ -58,7 +66,12 @@ describe('speechProgress', () => {
     expect(text).toContain('还没轮到（按发言顺序）：10号 → 11号 → 12号 → 1号 → 2号 → 3号 → 4号，共 7 人');
     expect(text).toContain('不是沉默');
     expect(text).not.toContain('未发言');
-    expect(text).toContain('由 5号 做归纳总结');
+    expect(text).toContain('全部发言结束后直接放逐投票');
+    const withSheriff = speechProgress(
+      { kind: 'speech', purpose: 'discussion', day: 2, order, spoken: [4, 5, 7], first: 4, clockwise: true },
+      { ...view(8), sheriff: 3 } as PlayerView,
+    );
+    expect(withSheriff).toContain('由警长 4号 最后发言并归票');
   });
 
   it('tells the last speaker to wrap up', () => {
@@ -79,8 +92,17 @@ describe('speechProgress', () => {
 
   it('covers tie defences', () => {
     const text = speechProgress({ kind: 'speech', purpose: 'defense', day: 1, order: [2, 9], spoken: [] }, view(2));
-    expect(text).toContain('平票玩家：3号、10号');
-    expect(text).toContain('还有 1 位平票玩家正名');
+    expect(text).toContain('PK 玩家：3号、10号');
+    expect(text).toContain('还有 1 位 PK 玩家发言');
+    expect(text).toContain('台下玩家');
+    const pk = speechProgress({ kind: 'speech', purpose: 'campaignPk', day: 1, order: [2, 9], spoken: [2] }, view(9));
+    expect(pk).toContain('再平票则警徽流失');
+  });
+
+  it('shows the campaign order on the election stage', () => {
+    const text = speechProgress({ kind: 'speech', purpose: 'campaign', day: 1, order: [1, 4, 8], spoken: [1], first: 1, clockwise: true }, view(4));
+    expect(text).toContain('上警玩家：2号、5号、9号');
+    expect(text).toContain('你之后还有 1 位警上玩家发言');
   });
 });
 
@@ -118,6 +140,20 @@ describe('day speech prompt', () => {
   it('puts the speaker on a header line and fences the words', () => {
     const t = sharedNotebook(view(0, 'villager', [speech(6, '6号你承认刀了4号？')]), { onlyDay: 1 });
     expect(t).toBe('[第1天 发言] 发言人：7号（P7）\n「6号你承认刀了4号？」');
+  });
+  it('keeps the election in its own shared record', () => {
+    const campaign = { ...speech(3, '我是预言家，警徽流 5、8'), speechKind: 'campaign', phase: 'election' } as GameEvent;
+    const day = { ...speech(6, '我站边4号'), phase: 'discussion' } as GameEvent;
+    const v = view(0, 'villager', [campaign, day]);
+    const election = sharedNotebook(v, { election: true });
+    expect(election).toContain('[第1天 警上发言] 发言人：4号');
+    expect(election).not.toContain('我站边4号');
+    const today = sharedNotebook(v, { onlyDay: 1 });
+    expect(today).toContain('我站边4号');
+    expect(today).not.toContain('警徽流');
+    // a campaign speaker answers the others on the stage, a day speaker is pointed at both books
+    expect(speechTask({ kind: 'speech', purpose: 'campaign', day: 1 }, view(8, 'villager', [campaign, day]))).toContain('【警长竞选记录】');
+    expect(speechTask(req, view(8, 'villager', [campaign, day]))).toMatch(/在你之前已有 7号 发言.*警上的发言见【警长竞选记录】/);
   });
   it('asks to check who said a quoted line', () => {
     expect(speechTask(req, view(7, 'villager', [speech(6, '…')]))).toContain('【引用自检】');
