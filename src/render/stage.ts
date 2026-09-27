@@ -162,6 +162,7 @@ const CLOSE_YAW = 0.2;
 /** Aimed below the waist, so the figure stands in the upper part of the screen (panels cover the bottom). */
 const CLOSE_AIM_Y = 0.3;
 const CLOSE_AIM_Y_WIDE = 0.8;
+const CLOSE_SHIFT_WIDE = 0.22;
 const CLOSE_HOUSE_DIST = 17;
 const CLOSE_HOUSE_AIM_Y = 1.2;
 /** How far the view may be panned away from its framed target. */
@@ -259,6 +260,10 @@ export class Stage {
   /** The overview's lens for this viewport (see `resize`). */
   private wideFov = FOV;
   private viewH = 1;
+  private viewW = 1;
+  private viewHcss = 1;
+  /** Close-up's sideways shift of the picture (fraction of the width). */
+  private viewShift = 0;
   sounds?: StageSounds;
 
   constructor(private host: HTMLElement) {
@@ -1746,6 +1751,9 @@ export class Stage {
     (this.tiltH.uniforms.texel.value as THREE.Vector2).set(1 / (w * pr), 0);
     (this.tiltV.uniforms.texel.value as THREE.Vector2).set(0, 1 / (h * pr));
     this.viewH = h * pr;
+    this.viewW = w;
+    this.viewHcss = h;
+    if (this.viewShift) this.camera.setViewOffset(w, h, this.viewShift * w, 0, w, h);
     this.fx.setViewport(this.viewH, this.camera.fov);
   }
 
@@ -1833,6 +1841,13 @@ export class Stage {
       else this.resetView(false);
     }
     this.wasClose = close;
+    // landscape phone: the card takes the right side, so the figure stands left of centre
+    const shiftGoal = close && this.camera.aspect > 1 ? CLOSE_SHIFT_WIDE : 0;
+    if (Math.abs(this.viewShift - shiftGoal) > 0.0005) {
+      this.viewShift += (shiftGoal - this.viewShift) * Math.min(1, dt * 2);
+      if (Math.abs(this.viewShift) < 0.0005) this.camera.clearViewOffset();
+      else this.camera.setViewOffset(this.viewW, this.viewHcss, this.viewShift * this.viewW, 0, this.viewW, this.viewHcss);
+    }
     const fovGoal = close ? CLOSE_FOV : this.wideFov;
     if (Math.abs(this.camera.fov - fovGoal) > 0.01) {
       this.camera.fov += (fovGoal - this.camera.fov) * Math.min(1, dt * 2);
