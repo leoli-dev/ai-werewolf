@@ -156,15 +156,18 @@ const FIT_ASPECT_PORTRAIT = 1.55;
 const FOV_MAX = 66;
 /** Phone close-up: an eye-level shot of one seat. */
 const CLOSE_FOV = 42;
-const CLOSE_DIST = 9;
 const CLOSE_PITCH = 0.12;
 const CLOSE_YAW = 0.2;
-/** Aimed below the waist, so the figure stands in the upper part of the screen (panels cover the bottom). */
-const CLOSE_AIM_Y = 0.3;
-const CLOSE_AIM_Y_WIDE = 0.8;
-const CLOSE_SHIFT_WIDE = 0.22;
-const CLOSE_HOUSE_DIST = 17;
-const CLOSE_HOUSE_AIM_Y = 1.2;
+/** What the close-up frames (world units): a villager, the werewolf form, a house (its owner indoors). */
+const CLOSE_SUBJECT = {
+  person: { h: 2.3, aim: 1.05 },
+  wolf: { h: 3, aim: 1.4 },
+  house: { h: 7.5, aim: 2.6 },
+};
+/** Share of the free screen height the subject fills. */
+const CLOSE_FILL = 0.62;
+const CLOSE_DIST_MIN = 6;
+const CLOSE_DIST_MAX = 26;
 /** How far the view may be panned away from its framed target. */
 const MAX_PAN = 26;
 
@@ -262,8 +265,10 @@ export class Stage {
   private viewH = 1;
   private viewW = 1;
   private viewHcss = 1;
-  /** Close-up's sideways shift of the picture (fraction of the width). */
-  private viewShift = 0;
+  /** Close-up: the picture's shift (CSS px) that centres the subject in the free part of the screen. */
+  private viewShift = new THREE.Vector2();
+  /** The part of the screen no panel covers (CSS px), from the HUD; null = all of it. */
+  private free: { left: number; top: number; right: number; bottom: number } | null = null;
   sounds?: StageSounds;
 
   constructor(private host: HTMLElement) {
@@ -359,6 +364,11 @@ export class Stage {
     // once the game is decided its ending owns the sky
     if (this.ending) return;
     this.nightTarget = night ? 1 : 0;
+  }
+
+  /** The part of the screen the HUD leaves uncovered: the close-up centres its subject there. */
+  setFreeArea(r: { left: number; top: number; right: number; bottom: number } | null) {
+    this.free = r;
   }
 
   /** Close-up: whose seat the camera stands in front of. */
@@ -1700,7 +1710,7 @@ export class Stage {
     if (!this.occluders) {
       this.occluders = [
         { meshes: this.meshesOf(this.town.plazaTree.group), at: this.town.plazaTree.group.position, r: 2.2, hidden: false },
-        ...this.town.lanterns.map((l) => ({ meshes: this.meshesOf(l.parent!), at: l.parent!.position, r: 0.7, hidden: false })),
+        ...this.town.lanterns.map((l) => ({ meshes: this.meshesOf(l.parent!), at: l.parent!.position, r: 1.3, hidden: false })),
       ];
     }
     const from = new THREE.Vector2(this.camera.position.x, this.camera.position.z);
@@ -1753,7 +1763,7 @@ export class Stage {
     this.viewH = h * pr;
     this.viewW = w;
     this.viewHcss = h;
-    if (this.viewShift) this.camera.setViewOffset(w, h, this.viewShift * w, 0, w, h);
+    if (this.viewShift.lengthSq()) this.camera.setViewOffset(w, h, this.viewShift.x, this.viewShift.y, w, h);
     this.fx.setViewport(this.viewH, this.camera.fov);
   }
 
@@ -1817,17 +1827,22 @@ export class Stage {
     if (this.shot && t > this.shot.until) this.shot = null;
     const close = this.inCloseUp;
     let closeAt: THREE.Vector3 | null = null;
-    let closeDist = CLOSE_DIST;
+    let closeDist = 0;
+    // the free part of the screen (below the top bar, above / beside the panels)
+    const W = this.viewW;
+    const H = this.viewHcss;
+    const fr = this.free ?? { left: 0, top: 0, right: W, bottom: H };
+    const freeH = Math.max(80, fr.bottom - fr.top);
     if (close) {
       // stand before the seat, looking out from the plaza: at them, their grave, or their door if indoors
       const a = this.actors[this.closeSeat];
       const at = this.anchor(a);
       // indoors: step back far enough to take in the whole house
-      closeDist = at ? CLOSE_DIST : CLOSE_HOUSE_DIST;
-      // a landscape phone has little height to spare under the top bar: aim at the middle of the figure
-      const aim = this.camera.aspect > 1 ? CLOSE_AIM_Y_WIDE : CLOSE_AIM_Y;
-      closeAt = (at ?? this.town.houses[a.id].doorstep).clone().setY(at ? aim : CLOSE_HOUSE_AIM_Y);
-      // a little off the line from the plaza's centre: half the seats have a lantern right on it
+      const subj = !at ? CLOSE_SUBJECT.house : a.wolf.visible ? CLOSE_SUBJECT.wolf : CLOSE_SUBJECT.person;
+      closeAt = (at ?? this.town.houses[a.id].doorstep).clone().setY(subj.aim);
+      // near enough that the subject fills most of the free height
+      const tan = Math.tan(THREE.MathUtils.degToRad(CLOSE_FOV / 2));
+      closeDist = THREE.MathUtils.clamp(subj.h / (CLOSE_FILL * (freeH / H) * 2 * tan), CLOSE_DIST_MIN, CLOSE_DIST_MAX);
       this.yawGoal = Math.atan2(-closeAt.x, -closeAt.z) + CLOSE_YAW;
       this.pitchGoal = CLOSE_PITCH;
       if (!this.wasClose) {
@@ -1841,12 +1856,14 @@ export class Stage {
       else this.resetView(false);
     }
     this.wasClose = close;
-    // landscape phone: the card takes the right side, so the figure stands left of centre
-    const shiftGoal = close && this.camera.aspect > 1 ? CLOSE_SHIFT_WIDE : 0;
-    if (Math.abs(this.viewShift - shiftGoal) > 0.0005) {
-      this.viewShift += (shiftGoal - this.viewShift) * Math.min(1, dt * 2);
-      if (Math.abs(this.viewShift) < 0.0005) this.camera.clearViewOffset();
-      else this.camera.setViewOffset(this.viewW, this.viewHcss, this.viewShift * this.viewW, 0, this.viewW, this.viewHcss);
+    // centre the subject in the free part of the screen, not behind the panels
+    const shiftGoal = close ? new THREE.Vector2(W / 2 - (fr.left + fr.right) / 2, H / 2 - (fr.top + fr.bottom) / 2) : new THREE.Vector2();
+    if (this.viewShift.distanceTo(shiftGoal) > 0.5) {
+      this.viewShift.lerp(shiftGoal, Math.min(1, dt * 2.5));
+      if (this.viewShift.length() < 0.5) {
+        this.viewShift.set(0, 0);
+        this.camera.clearViewOffset();
+      } else this.camera.setViewOffset(W, H, this.viewShift.x, this.viewShift.y, W, H);
     }
     const fovGoal = close ? CLOSE_FOV : this.wideFov;
     if (Math.abs(this.camera.fov - fovGoal) > 0.01) {
@@ -1905,8 +1922,14 @@ export class Stage {
       this.focusLight.intensity += (60 - this.focusLight.intensity) * Math.min(1, dt * 3);
     } else {
       ringMat.opacity += (0 - ringMat.opacity) * Math.min(1, dt * 4);
-      this.focusLight.intensity += (0 - this.focusLight.intensity) * Math.min(1, dt * 3);
     }
+    if (closeAt && !focused) {
+      // the close-up's subject (or their house, at night) is never left in the dark
+      const base = closeAt.clone().setY(0);
+      this.focusLight.position.set(base.x * 0.7, 9, base.z * 0.7);
+      this.focusLight.target.position.copy(base);
+      this.focusLight.intensity += (45 - this.focusLight.intensity) * Math.min(1, dt * 3);
+    } else if (!focused) this.focusLight.intensity += (0 - this.focusLight.intensity) * Math.min(1, dt * 3);
 
     // billboards face camera around Y
     for (const b of this.billboards) {

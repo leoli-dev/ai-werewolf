@@ -259,6 +259,6 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
     const back = h('div', { class: 'modal-back config-back' }, form);
     document.addEventListener('keydown', onKey, true);
     root.appendChild(back);
-    (form.querySelector('.btn.primary') as HTMLButtonElement).focus();
+    (form.querySelector('.btn.primary') as HTMLButtonElement).focus({ preventScroll: true }); // a phone would scroll the dialog to the bottom
   });
 }

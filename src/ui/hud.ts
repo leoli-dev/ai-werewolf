@@ -550,6 +550,31 @@ export class GameUI {
     this.setView(id);
   }
 
+  /**
+   * The part of the screen the HUD leaves uncovered: below the top bar, above the
+   * panels spanning the width (portrait), left of the ones on the right (landscape).
+   */
+  private freeArea() {
+    const W = innerWidth;
+    const H = innerHeight;
+    const r = { left: 0, top: 0, right: W, bottom: H };
+    const shown = (el: Element | null) => {
+      const b = el?.getBoundingClientRect();
+      return b && b.width > 0 && b.height > 0 ? b : null;
+    };
+    for (const sel of ['#banner', '#seats', '#topright']) {
+      const b = shown(this.root.querySelector(sel));
+      if (b && b.top < H / 3) r.top = Math.max(r.top, b.bottom);
+    }
+    for (const sel of ['#closeup', '#action.show', '#dock', '#hud', '#chat']) {
+      const b = shown(this.root.querySelector(sel));
+      if (!b || b.top < r.top) continue;
+      if (b.width > W * 0.6 || b.right < W * 0.6) r.bottom = Math.min(r.bottom, b.top);
+      else r.right = Math.min(r.right, b.left);
+    }
+    return r;
+  }
+
   /** Short identity for a seat chip: 狼 / 神 / 民 / 好, from the system's info or the human's mark. */
   private shortIdentity(id: number): { text: string; cls: string; mark: boolean } | null {
     if (id === this.me) return { text: '我', cls: 'me', mark: false };
@@ -1367,6 +1392,7 @@ export class GameUI {
         document.body.classList.toggle('closeup', close);
         this.renderStrip();
         if (close) this.renderCard();
+        this.stage.setFreeArea(this.freeArea());
       }
     } else document.body.classList.remove('closeup');
     const actor = this.visibleActor();
@@ -1477,7 +1503,8 @@ export class GameUI {
               ]),
         ),
       );
-      setTimeout(() => ta.focus(), 50);
+      // a phone would throw up the keyboard over the scene before the prompt is read
+      if (!MOBILE.matches) setTimeout(() => ta.focus(), 50);
     });
   }
 
