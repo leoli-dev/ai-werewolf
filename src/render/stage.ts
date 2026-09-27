@@ -147,6 +147,13 @@ const PITCH_MAX = 1.35;
 const ZOOM_MIN = 0.35;
 // farther than this the night fog (FogExp2 0.02) swallows the town
 const ZOOM_MAX = 1.4;
+/** Vertical field of view at FIT_ASPECT and wider. */
+const FOV = 32;
+/** Narrower viewports widen the lens (to at most FOV_MAX) to see as far sideways as this aspect. */
+const FIT_ASPECT = 1.3;
+/** Portrait fits the whole ring across: its side seats sit right at the screen's edges otherwise. */
+const FIT_ASPECT_PORTRAIT = 1.55;
+const FOV_MAX = 66;
 /** How far the view may be panned away from its framed target. */
 const MAX_PAN = 26;
 
@@ -159,7 +166,9 @@ export interface ScreenPos {
 export class Stage {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(32, 1, 0.5, 400);
+  readonly camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, 400);
+  /** Extra camera distance a tall viewport needs beyond what its wider lens covers. */
+  private aspectFit = 1;
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private tiltH: ShaderPass;
@@ -1634,7 +1643,16 @@ export class Stage {
   private resize() {
     const w = this.host.clientWidth || window.innerWidth;
     const h = this.host.clientHeight || window.innerHeight;
-    this.camera.aspect = w / h;
+    const aspect = w / h;
+    this.camera.aspect = aspect;
+    // a tall (phone portrait) viewport keeps the landscape view's sideways reach by
+    // widening the lens (up to FOV_MAX), and only backs off for the rest: backing off
+    // alone would put the camera so far out that the night fog swallows the town
+    const fit = aspect < 1 ? FIT_ASPECT_PORTRAIT : FIT_ASPECT;
+    const want = Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * Math.max(1, fit / aspect);
+    const fov = Math.min(FOV_MAX, THREE.MathUtils.radToDeg(2 * Math.atan(want)));
+    this.camera.fov = fov;
+    this.aspectFit = want / Math.tan(THREE.MathUtils.degToRad(fov / 2));
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
@@ -1654,6 +1672,8 @@ export class Stage {
     this.atmo.mix += (this.nightTarget - this.atmo.mix) * Math.min(1, dt * 0.8);
     const n = this.atmo.mix;
     this.atmo.update(dt, t);
+    // the fog is tuned for the landscape framing: thin it as far as a tall viewport backs off
+    (this.scene.fog as THREE.FogExp2).density /= this.aspectFit;
     this.fx.update(dt, t);
     this.shield.update(dt, t);
     this.magic.update(dt, t);
@@ -1704,10 +1724,8 @@ export class Stage {
       ? this.shot.target.clone().add(this.pan)
       : (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
     this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
-    // stay wide enough to keep most of the ring (and their bubbles) in view; a tall
-    // (phone portrait) viewport sees less sideways, so it backs off a bit further
-    const aspectFit = THREE.MathUtils.clamp(1.3 / this.camera.aspect, 1, 2.1);
-    const dist = (this.shot ? this.shot.dist : focused ? 34 : 40) * this.userZoom * aspectFit;
+    // stay wide enough to keep most of the ring (and their bubbles) in view (see `resize`)
+    const dist = (this.shot ? this.shot.dist : focused ? 34 : 40) * this.userZoom * this.aspectFit;
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
     const sway = Math.sin(t * 0.05) * 0.12;
     {

@@ -18,6 +18,9 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #0c0b0a; color: var(--ink); font-family: var(--serif); }
+/* no pinch / double-tap zoom of the page (the town has its own pinch-zoom); scrolling panels still scroll */
+html, body, #app, #app *, #labels * { touch-action: pan-x pan-y; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 button, input, select, textarea { font: inherit; color: inherit; }
 
 #stage { position: fixed; inset: 0; }
@@ -362,6 +365,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
     max-height: calc(100dvh - var(--top-h) - var(--dock-h) - var(--kb, 0px) - var(--action-h, 0px) - 12px);
     animation: sheet 0.2s ease-out; z-index: 5; /* above the night-turn announcement */
   }
+  /* near-opaque: the name plates in the town must not read through a sheet */
+  #hud > .panel, #chat, #action { background: rgba(20, 17, 15, 0.97); }
   #app[data-sheet="players"] #hud { display: flex; }
   #app[data-sheet="chat"] #chat { display: flex; height: 62dvh; }
   @keyframes sheet { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }

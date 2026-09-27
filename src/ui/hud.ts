@@ -133,6 +133,8 @@ export class GameUI {
   private chatFilter!: HTMLElement;
   private action!: HTMLElement;
   private labelEls: HTMLElement[] = [];
+  /** Rendered width of each label, measured whenever its contents change. */
+  private labelW: number[] = [];
   /** `spot`: a defense or last words after the vote, the only bubble on the plaza. */
   private bubbles = new Map<number, { text: string; seq: number; spot: boolean }>();
   private bubbleSeq = 0;
@@ -1138,7 +1140,9 @@ export class GameUI {
       const el = this.labelEls[i];
       el.style.display = p.visible ? '' : 'none';
       if (!p.visible) return;
-      el.style.left = `${p.x}px`;
+      // keep labels near the screen's edges (seats at the ring's sides on a phone) fully on screen
+      const half = (this.labelW[i] ?? 0) / 2 + 4;
+      el.style.left = `${half * 2 < innerWidth ? Math.min(Math.max(p.x, half), innerWidth - half) : p.x}px`;
       el.style.top = `${p.y}px`;
       const pl = this.game.players[i];
       const k = this.knownOf(i);
@@ -1161,6 +1165,7 @@ export class GameUI {
         h('div', { class: 'plate' }, h('span', { class: `n ${k?.ring ? `ring-${k.ring}` : ''}` }, String(i + 1)), pl.name, alive ? '' : ' ✝'),
       ];
       el.replaceChildren(...parts.filter((x): x is HTMLDivElement => x !== null));
+      this.labelW[i] = el.offsetWidth;
     });
   }
 

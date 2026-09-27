@@ -25,6 +25,10 @@ import { PHASE_NAME, showTitle } from './ui/title';
 const app = document.getElementById('app')!;
 const labels = document.getElementById('labels')!;
 const stage = new Stage(document.getElementById('stage')!);
+// no pinch-zooming the page: iOS Safari ignores `user-scalable=no`, so stop its gestures here
+// (the town's own pinch-zoom runs on pointer events and is unaffected)
+for (const type of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(type, (e) => e.preventDefault());
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 if (import.meta.env.DEV) (window as unknown as { __stage: Stage }).__stage = stage; // debugging hook
 stage.sounds = {
   doorOpen: (v) => audio.doorOpen(v),
