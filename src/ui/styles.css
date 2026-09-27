@@ -462,6 +462,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
   /* the town: smaller name plates and bubbles */
   .label .plate { font-size: 10px; padding: 0 4px; }
+  /* identities are on the seat strip: the crowded wide shots keep just the name plates */
+  .label .role-tag { display: none; }
   .label .plate .n { width: 15px; height: 15px; font-size: 9px; }
   .label .bubble { max-width: min(190px, 52vw); max-height: 26dvh; font-size: 11px; padding: 4px 7px; }
   .label .bubble.spot { max-width: min(240px, 64vw); font-size: 12px; padding: 6px 9px; }
