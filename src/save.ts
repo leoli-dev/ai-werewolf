@@ -11,8 +11,8 @@ import type { Mark } from './ui/hud';
  * seer's checks, what each AI noted to itself.
  */
 export interface SaveGame {
-  /** 2: 标准流程（警长竞选、屠边）; older journals no longer replay. */
-  v: 2;
+  /** 3: 狼王守卫板子（狼王 + 3 狼）; older journals no longer replay. */
+  v: 3;
   savedAt: number;
   /** That game's own choices (pace, sound and the LLM connection come from 配置). */
   prefs: GamePrefs & Pick<Settings, 'mode'>;
@@ -29,14 +29,14 @@ export interface SaveGame {
   meta: { seat: number; role: Role; day: number; phase: Phase; alive: number };
 }
 
-const KEY = 'ai-werewolf:save:v2';
+const KEY = 'ai-werewolf:save:v3';
 
 export function readSave(): SaveGame | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
     const s = JSON.parse(raw) as SaveGame;
-    return s?.v === 2 && Array.isArray(s.journal) ? s : null;
+    return s?.v === 3 && Array.isArray(s.journal) ? s : null;
   } catch {
     return null;
   }

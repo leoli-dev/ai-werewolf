@@ -2,7 +2,7 @@ import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, Wol
 import { EXPLODE_CHOICE, YES_NO_ACTIONS, seat, type TargetAction } from '../game/types';
 
 const NOTE_TAG: Record<TargetAction, string> = {
-  vote: '投票', revote: 'PK再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', witchSave: '救', witchPoison: '毒',
+  vote: '投票', revote: 'PK再投', seer: '查验', guard: '守护', wolfKill: '刀', hunterShot: '开枪', wolfKingShot: '狼王开枪', witchSave: '救', witchPoison: '毒',
   runForSheriff: '上警', withdraw: '退水', sheriffVote: '警长投票', sheriffRevote: '警长PK再投', badge: '移交警徽', speakOrder: '发言顺序从',
 };
 import type { AwardVote, ReviewContext, ReviewResult, Reviewer } from '../game/ceremony';

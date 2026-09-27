@@ -2,8 +2,10 @@ import { Rng } from './rng';
 import {
   EXPLODE_CHOICE,
   GOD_ROLES,
+  GUN_ROLES,
   ROLE_NAME,
   STANDARD_BOARD,
+  isWolf,
   seat,
   type Agent,
   type DeathCause,
@@ -54,6 +56,8 @@ export interface GameState {
   witch: { hasAntidote: boolean; hasPoison: boolean };
   /** The hunter's one shot is spent (fired, or lost to poison). */
   hunterShot: boolean;
+  /** Same for the 狼王's gun (also lost to a 自爆). */
+  wolfKingShot: boolean;
   lastGuarded: number | null;
   /** Seer knowledge: target -> 好人 / 狼人 (told at once, during the seer's turn). */
   seerChecks: Record<number, 'good' | 'wolf'>;
@@ -63,11 +67,11 @@ export interface GameState {
   sheriff: number | null;
 }
 
-/** 预女猎守 wake order: 守卫 → 狼人 → 女巫 → 预言家 → 猎人. */
+/** Wake order: 守卫 → 狼人 → 女巫 → 预言家 → 猎人 (the 狼王 has no turn of its own: it wakes with the pack). */
 export type NightStep = 'guard' | 'wolves' | 'witch' | 'seer' | 'hunter';
 
 /**
- * A night role's action (or the hunter's shot), staged for whoever may see it:
+ * A night role's action (or a 猎人 / 狼王 shot), staged for whoever may see it:
  * night ones only for the acting player (or god view), the day shot for everyone.
  */
 export interface RoleCue {
@@ -150,6 +154,7 @@ export class Game {
       winner: null,
       witch: { hasAntidote: true, hasPoison: true },
       hunterShot: false,
+      wolfKingShot: false,
       lastGuarded: null,
       seerChecks: {},
       nightStep: null,
@@ -238,7 +243,7 @@ export class Game {
     return this.players.find((p) => p.role === role);
   }
   wolves(): Player[] {
-    return this.players.filter((p) => p.role === 'werewolf');
+    return this.players.filter((p) => isWolf(p.role));
   }
 
   /** How everyone who is out went out (god view: for the post-game ceremony). */
@@ -255,7 +260,7 @@ export class Game {
     const gods = alive.filter((p) => GOD_ROLES.includes(p.role)).length;
     const villagers = alive.filter((p) => p.role === 'villager').length;
     if (gods === 0 || villagers === 0) return 'wolf';
-    if (!alive.some((p) => p.role === 'werewolf')) return 'good';
+    if (!alive.some((p) => isWolf(p.role))) return 'good';
     return null;
   }
 
@@ -263,7 +268,8 @@ export class Game {
   viewFor(id: number): PlayerView {
     const self = this.players[id];
     const known: PlayerView['known'] = { [id]: self.role };
-    if (self.role === 'werewolf') for (const w of this.wolves()) known[w.id] = 'werewolf';
+    // the pack knows each other, the 狼王 included
+    if (isWolf(self.role)) for (const w of this.wolves()) known[w.id] = w.role;
     if (self.role === 'seer') Object.assign(known, this.state.seerChecks, { [id]: 'seer' });
     if (this.state.phase === 'ended') for (const p of this.players) known[p.id] = p.role;
     return {
@@ -276,6 +282,7 @@ export class Game {
       sheriff: this.state.sheriff,
       witch: self.role === 'witch' ? { ...this.state.witch } : undefined,
       hunter: self.role === 'hunter' ? { hasShot: this.state.hunterShot } : undefined,
+      wolfKing: self.role === 'wolfKing' ? { hasShot: this.state.wolfKingShot } : undefined,
       guard: self.role === 'guard' ? { lastGuarded: this.state.lastGuarded } : undefined,
     };
   }
@@ -452,12 +459,12 @@ export class Game {
     if (this.agents.length !== this.players.length) throw new Error('agents not set');
     for (const p of this.players) {
       let text = `你是 ${seat(p.id)}，身份：${ROLE_NAME[p.role]}。`;
-      if (p.role === 'werewolf') {
-        text += `狼队友：${this.wolves().filter((w) => w.id !== p.id).map((w) => seat(w.id)).join('、')}。`;
+      if (isWolf(p.role)) {
+        text += `狼队友：${this.wolves().filter((w) => w.id !== p.id).map((w) => `${seat(w.id)}${w.role === 'wolfKing' ? '（狼王）' : ''}`).join('、')}。`;
       }
       this.gm(text, [p.id]);
     }
-    this.gm('游戏开始。12 人局（预女猎守）：4 狼人、4 村民、预言家、女巫、猎人、守卫。狼人屠边（神职全灭或村民全灭）获胜，好人放逐全部狼人获胜。');
+    this.gm('游戏开始。12 人局（狼王守卫）：狼王 + 3 狼人、4 村民、预言家、女巫、猎人、守卫。狼人屠边（神职全灭或村民全灭）获胜，好人放逐全部狼人获胜。');
     while (true) {
       this.state.day += 1;
       const deaths = await this.night();
@@ -547,7 +554,7 @@ export class Game {
       const target = await this.askTarget(seer.id, 'seer', fresh.length ? fresh : others, false, '选择今晚要查验的玩家（结果为好人或狼人）。', '预言家查验中');
       if (target !== null) {
         // the GM tells the seer at once
-        const result = this.players[target].role === 'werewolf' ? 'wolf' : 'good';
+        const result = isWolf(this.players[target].role) ? 'wolf' : 'good';
         this.state.seerChecks[target] = result;
         this.emit('private', `查验结果：${seat(target)} 是【${result === 'wolf' ? '狼人' : '好人'}】。`, { kind: 'private', to: [seer.id] }, { data: { check: target, result } });
         this.publish();
@@ -686,28 +693,31 @@ export class Game {
 
   /**
    * After a death: the sheriff hands on (or tears up) the badge, the dead speaks
-   * (if entitled to last words), and a hunter not poisoned may fire. A hunter's
-   * victim dies by day, so they get last words too.
+   * (if entitled to last words), and a hunter or 狼王 not poisoned may fire. The
+   * victim of a shot dies by day, so they get last words too.
    */
   private async aftermath(id: number, lastWords: boolean) {
     if (this.state.sheriff === id) await this.passBadge(id);
     if (lastWords) await this.speech(id, 'lastWords', '遗言');
     const p = this.players[id];
-    if (p.role !== 'hunter' || this.state.hunterShot) return;
+    if (!GUN_ROLES.includes(p.role)) return;
+    const king = p.role === 'wolfKing';
+    const spent = king ? 'wolfKingShot' : 'hunterShot';
+    if (this.state[spent]) return;
     if (this.causes.get(id) === 'poison') {
-      this.state.hunterShot = true; // poisoned: cannot shoot (the GM says nothing)
+      this.state[spent] = true; // poisoned: cannot shoot (the GM says nothing)
       return;
     }
     this.gm(`${seat(id)} 出局，若有技能可以发动。`);
-    const shot = await this.askTarget(id, 'hunterShot', this.aliveIds(), true, '你已出局，可以开枪带走一名存活玩家（整局仅一发），也可以不开枪。', '出局技能');
-    this.state.hunterShot = true; // the chance is spent either way
+    const shot = await this.askTarget(id, king ? 'wolfKingShot' : 'hunterShot', this.aliveIds(), true, '你已出局，可以开枪带走一名存活玩家（整局仅一发），也可以不开枪。', '出局技能');
+    this.state[spent] = true; // the chance is spent either way
     if (shot === null) {
       await this.pace();
       return;
     }
-    this.gm(`${seat(id)} 是猎人，开枪带走了 ${seat(shot)} ${this.players[shot].name}。`);
+    this.gm(`${seat(id)} 是${king ? '狼王' : '猎人'}，开枪带走了 ${seat(shot)} ${this.players[shot].name}。`);
     await this.cue({ kind: 'dayShot', actor: id, target: shot });
-    this.kill(shot, 'hunter');
+    this.kill(shot, king ? 'wolfKing' : 'hunter');
     await this.pace(2);
     if (this.endIfWon()) return;
     await this.aftermath(shot, true);
@@ -776,7 +786,7 @@ export class Game {
     const stay: number[] = [];
     const out: number[] = [];
     for (const id of cands) {
-      const r = await this.askTarget(id, 'withdraw', [id], true, '是否退水（放弃竞选警长）？退水后不能再当选，也不能投警长票。', '考虑是否退水', this.players[id].role === 'werewolf');
+      const r = await this.askTarget(id, 'withdraw', [id], true, '是否退水（放弃竞选警长）？退水后不能再当选，也不能投警长票。', '考虑是否退水', isWolf(this.players[id].role));
       if (r === EXPLODE_CHOICE) {
         await this.selfDestruct(id);
         return this.suspendElection(cands, voters);
@@ -835,9 +845,10 @@ export class Game {
 
   // ───────────────────────── 发言 / 放逐 ─────────────────────────
 
-  /** A wolf blows up: public reveal, out at once with no last words; a sheriff's badge goes with them. */
+  /** A wolf blows up: public reveal, out at once with no last words and no shot (狼王); a sheriff's badge goes with them. */
   private async selfDestruct(id: number) {
     const inElection = this.state.phase === 'election';
+    if (this.players[id].role === 'wolfKing') this.state.wolfKingShot = true;
     this.gm(`${seat(id)} ${this.players[id].name} 自爆，身份是狼人！${inElection ? '' : '本轮剩余发言与投票取消，直接进入黑夜。'}`);
     this.kill(id, 'explode');
     await this.cue('explode');
@@ -851,7 +862,7 @@ export class Game {
 
   /** Returns true if the speaker (a wolf) self-destructed: the day ends at once. */
   private async speech(id: number, purpose: SpeechKind, label: string, seq: SpeechOrder = {}): Promise<boolean> {
-    const canExplode = purpose !== 'lastWords' && this.players[id].role === 'werewolf';
+    const canExplode = purpose !== 'lastWords' && isWolf(this.players[id].role);
     const text = (await this.ask(id, { kind: 'speech', purpose, day: this.state.day, ...seq, ...(canExplode ? { canExplode } : {}) }, label)) as string;
     const explode = canExplode && this.lastSpeechExplode;
     const data = { ...(this.lastSpeechFallback ? { fallback: true } : {}), ...(explode ? { explode: true } : {}) };

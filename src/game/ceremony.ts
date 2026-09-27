@@ -79,12 +79,12 @@ export function tallyAwards(votes: (AwardVote | null)[]): AwardTally {
 /**
  * A rough score of how well each seat played, from the record alone (the rule
  * AI's opinion): good votes on wolves, checks that found wolves, potions and the
- * hunter's shot on the right side, and being on the winning team.
+ * hunter's (or 狼王's) shot on the right side, and being on the winning team.
  */
 export function playScores(ctx: Pick<ReviewContext, 'players' | 'winner' | 'events' | 'causes'>): number[] {
   const { players, winner, events, causes } = ctx;
   const score = players.map(() => 0);
-  const wolf = (id: number) => players[id]?.role === 'werewolf';
+  const wolf = (id: number) => !!players[id] && teamOf(players[id].role) === 'wolf';
   for (const p of players) if (winner && teamOf(p.role) === winner) score[p.id] += 2;
   for (const e of events) {
     const d = e.data;
@@ -106,6 +106,10 @@ export function playScores(ctx: Pick<ReviewContext, 'players' | 'winner' | 'even
   const hunter = players.find((p) => p.role === 'hunter');
   if (hunter) {
     for (const [id, c] of Object.entries(causes)) if (c === 'hunter') score[hunter.id] += wolf(Number(id)) ? 2 : -2;
+  }
+  const king = players.find((p) => p.role === 'wolfKing');
+  if (king) {
+    for (const [id, c] of Object.entries(causes)) if (c === 'wolfKing') score[king.id] += wolf(Number(id)) ? -2 : 2;
   }
   // exiled good players hurt their side; an exiled wolf was caught out
   for (const [id, c] of Object.entries(causes)) if (c === 'vote') score[Number(id)] -= 1;

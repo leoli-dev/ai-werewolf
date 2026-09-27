@@ -1,6 +1,6 @@
 import { playScores, scoredVote, type AwardVote, type ReviewContext, type ReviewResult, type Reviewer } from '../game/ceremony';
 import { Rng } from '../game/rng';
-import { EXPLODE_CHOICE, ROLE_NAME, seat, type Agent, type PlayerView, type SpeechRequest, type SpeechResult, type TargetRequest, type WolfChatRequest } from '../game/types';
+import { EXPLODE_CHOICE, ROLE_NAME, isWolf, seat, type Agent, type PlayerView, type SpeechRequest, type SpeechResult, type TargetRequest, type WolfChatRequest } from '../game/types';
 
 export interface MockSnapshot {
   rng: number;
@@ -34,16 +34,16 @@ export class MockAgent implements Agent, Reviewer {
   }
 
   private isWolf(v: PlayerView) {
-    return v.self.role === 'werewolf';
+    return isWolf(v.self.role);
   }
 
   /** Pick the most suspicious candidate, with some noise. */
   private suspect(v: PlayerView, cands: number[]): number {
     const known = v.known;
-    const knownWolf = cands.filter((c) => known[c] === 'wolf' || (known[c] === 'werewolf' && !this.isWolf(v)));
+    const knownWolf = cands.filter((c) => known[c] === 'wolf' || (isWolf(known[c]) && !this.isWolf(v)));
     if (knownWolf.length) return this.rng.pick(knownWolf);
     // for a wolf, teammates are safe; for good players, any known non-wolf role is safe
-    const safe = cands.filter((c) => !(known[c] && known[c] !== 'wolf' && (this.isWolf(v) ? known[c] === 'werewolf' : known[c] !== 'werewolf')));
+    const safe = cands.filter((c) => !(known[c] && known[c] !== 'wolf' && (this.isWolf(v) ? isWolf(known[c]) : !isWolf(known[c]))));
     const pool = safe.length ? safe : cands;
     let best = pool[0];
     let bestScore = -Infinity;
@@ -72,7 +72,7 @@ export class MockAgent implements Agent, Reviewer {
     const others = v.players.filter((p) => p.alive && p.id !== v.self.id).map((p) => p.id);
     if (req.kind === 'wolfChat') {
       if (req.round > 1) return 'pass';
-      const nonWolf = others.filter((o) => v.known[o] !== 'werewolf');
+      const nonWolf = others.filter((o) => !isWolf(v.known[o]));
       return `我建议今晚刀 ${seat(this.rng.pick(nonWolf.length ? nonWolf : others))}，看起来像神。`;
     }
     const target = this.suspect(v, others);
@@ -124,7 +124,7 @@ export class MockAgent implements Agent, Reviewer {
         const trusted = c.filter((x) => v.known[x] === 'good' || (!this.isWolf(v) && claimsSeer(v, x)));
         if (trusted.length) return this.rng.pick(trusted);
         if (this.isWolf(v)) {
-          const mates = c.filter((x) => v.known[x] === 'werewolf');
+          const mates = c.filter((x) => isWolf(v.known[x]));
           if (mates.length) return this.rng.pick(mates);
         }
         return c.reduce((best, x) => ((this.suspicion.get(x) ?? 0) < (this.suspicion.get(best) ?? 0) ? x : best), c[0]);
@@ -134,7 +134,7 @@ export class MockAgent implements Agent, Reviewer {
         const checks = v.events.filter((e) => e.data?.result === 'good' && c.includes(e.data.check as number));
         if (checks.length) return checks[checks.length - 1].data!.check as number;
         if (this.isWolf(v)) {
-          const mates = c.filter((x) => v.known[x] === 'werewolf');
+          const mates = c.filter((x) => isWolf(v.known[x]));
           return mates.length ? this.rng.pick(mates) : null;
         }
         const calm = c.filter((x) => (this.suspicion.get(x) ?? 0) === 0);
@@ -143,7 +143,7 @@ export class MockAgent implements Agent, Reviewer {
       case 'speakOrder':
         return this.rng.pick(c);
       case 'wolfKill': {
-        const nonWolf = c.filter((x) => v.known[x] !== 'werewolf');
+        const nonWolf = c.filter((x) => !isWolf(v.known[x]));
         return this.rng.pick(nonWolf.length ? nonWolf : c);
       }
       case 'seer':
@@ -157,10 +157,16 @@ export class MockAgent implements Agent, Reviewer {
       }
       case 'hunterShot':
         return this.suspect(v, c);
+      case 'wolfKingShot': {
+        // take a good player along: a claimed seer first, else whoever is not a teammate
+        const nonWolf = c.filter((x) => !isWolf(v.known[x]));
+        const seer = nonWolf.filter((x) => claimsSeer(v, x));
+        return seer.length ? this.rng.pick(seer) : nonWolf.length ? this.rng.pick(nonWolf) : null;
+      }
       case 'vote':
       case 'revote': {
         if (this.isWolf(v)) {
-          const nonWolf = c.filter((x) => v.known[x] !== 'werewolf');
+          const nonWolf = c.filter((x) => !isWolf(v.known[x]));
           if (nonWolf.length) return this.suspect(v, nonWolf);
         }
         return this.suspect(v, c);
@@ -175,7 +181,7 @@ function mockReview(ctx: ReviewContext, rng: Rng): string {
   const vote = scoredVote(ctx, () => rng.next());
   const me = ctx.players[ctx.self];
   const role = (id: number) => ROLE_NAME[ctx.players[id].role];
-  const won = ctx.winner !== null && (me.role === 'werewolf') === (ctx.winner === 'wolf');
+  const won = ctx.winner !== null && isWolf(me.role) === (ctx.winner === 'wolf');
   const self = playScores(ctx)[ctx.self] > 0 ? '我自己这局还算对得起这个身份' : '我自己这局打得不太行，回去再练练';
   return rng.pick([
     `${won ? '赢了真开心！' : '输了有点可惜。'}这局我最佩服${seat(vote.best)}，${role(vote.best)}打得很到位；${seat(vote.worst)}这个${role(vote.worst)}就有点拉胯了。${self}。`,
