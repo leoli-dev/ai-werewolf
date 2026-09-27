@@ -218,7 +218,8 @@ export class AwardCeremony {
         ta,
         h('div', { class: 'row' }, count, h('button', { class: 'btn', onclick: () => done('没什么好说的，大家都辛苦了！') }, '过'), h('button', { class: 'btn primary', onclick: () => ta.value.trim() && done(ta.value.trim()) }, '发言 (⌘↵)')),
       );
-      setTimeout(() => ta.focus(), 50);
+      // a phone would throw up the keyboard before the prompt is read
+      if (!matchMedia('(max-width: 760px), (max-height: 520px)').matches) setTimeout(() => ta.focus(), 50);
     });
   }
 

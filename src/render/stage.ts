@@ -147,6 +147,29 @@ const PITCH_MAX = 1.35;
 const ZOOM_MIN = 0.35;
 // farther than this the night fog (FogExp2 0.02) swallows the town
 const ZOOM_MAX = 1.4;
+/** Vertical field of view at FIT_ASPECT and wider. */
+const FOV = 32;
+/** Narrower viewports widen the lens (to at most FOV_MAX) to see as far sideways as this aspect. */
+const FIT_ASPECT = 1.3;
+/** Portrait fits the whole ring across: its side seats sit right at the screen's edges otherwise. */
+const FIT_ASPECT_PORTRAIT = 1.55;
+const FOV_MAX = 66;
+/** Phone close-up: an eye-level shot of one seat. */
+const CLOSE_FOV = 42;
+/** Layer for whatever blocks the close-up's line of sight: the camera doesn't draw it. */
+const HIDDEN_LAYER = 5;
+const CLOSE_PITCH = 0.12;
+const CLOSE_YAW = 0.2;
+/** What the close-up frames (world units): a villager, the werewolf form, a house (its owner indoors). */
+const CLOSE_SUBJECT = {
+  person: { h: 2.3, aim: 1.05 },
+  wolf: { h: 3, aim: 1.4 },
+  house: { h: 7.5, aim: 2.6 },
+};
+/** Share of the free screen height the subject fills. */
+const CLOSE_FILL = 0.62;
+const CLOSE_DIST_MIN = 6;
+const CLOSE_DIST_MAX = 26;
 /** How far the view may be panned away from its framed target. */
 const MAX_PAN = 26;
 
@@ -159,7 +182,9 @@ export interface ScreenPos {
 export class Stage {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(32, 1, 0.5, 400);
+  readonly camera = new THREE.PerspectiveCamera(FOV, 1, 0.5, 400);
+  /** Extra camera distance a tall viewport needs beyond what its wider lens covers. */
+  private aspectFit = 1;
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private tiltH: ShaderPass;
@@ -226,6 +251,26 @@ export class Stage {
 
   onFrame?: (positions: ScreenPos[]) => void;
   onPick?: (id: number) => void;
+  /** Close-up: the player swiped sideways (+1: on to the next seat, -1: back). */
+  onSwipe?: (dir: 1 | -1) => void;
+
+  /**
+   * Phone view: instead of the overview the camera stands at eye level in front of
+   * one seat (`view`); the set pieces (wolves' attack, night roles, badge, endings)
+   * still take the wide shot while they play.
+   */
+  closeUp = false;
+  private closeSeat = 0;
+  private wasClose = false;
+  /** The overview's lens for this viewport (see `resize`). */
+  private wideFov = FOV;
+  private viewH = 1;
+  private viewW = 1;
+  private viewHcss = 1;
+  /** Close-up: the picture's shift (CSS px) that centres the subject in the free part of the screen. */
+  private viewShift = new THREE.Vector2();
+  /** The part of the screen no panel covers (CSS px), from the HUD; null = all of it. */
+  private free: { left: number; top: number; right: number; bottom: number } | null = null;
   sounds?: StageSounds;
 
   constructor(private host: HTMLElement) {
@@ -321,6 +366,21 @@ export class Stage {
     // once the game is decided its ending owns the sky
     if (this.ending) return;
     this.nightTarget = night ? 1 : 0;
+  }
+
+  /** The part of the screen the HUD leaves uncovered: the close-up centres its subject there. */
+  setFreeArea(r: { left: number; top: number; right: number; bottom: number } | null) {
+    this.free = r;
+  }
+
+  /** Close-up: whose seat the camera stands in front of. */
+  view(id: number) {
+    this.closeSeat = id;
+  }
+
+  /** The close-up is on screen right now (no set piece has taken the wide shot). */
+  get inCloseUp() {
+    return this.closeUp && !this.shot;
   }
 
   focus(id: number | null) {
@@ -1540,6 +1600,9 @@ export class Stage {
     let lx = 0;
     let ly = 0;
     let pinch: { dist: number; mx: number; my: number } | null = null;
+    /** Where a one-finger gesture started (a close-up swipe is judged on release). */
+    let sx = 0;
+    let sy = 0;
     const pinchOf = () => {
       const [a, b] = [...pointers.values()];
       return { dist: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
@@ -1566,6 +1629,8 @@ export class Stage {
       // left drag orbits; right drag (or shift + left) pans
       panning = e.button === 2 || e.shiftKey;
       moved = 0;
+      sx = e.clientX;
+      sy = e.clientY;
       lx = e.clientX;
       ly = e.clientY;
     });
@@ -1576,7 +1641,7 @@ export class Stage {
       p.y = e.clientY;
       this.dragReset = false;
       if (pointers.size >= 2) {
-        if (!pinch || pointers.size > 2) return;
+        if (!pinch || pointers.size > 2 || this.inCloseUp) return;
         const now = pinchOf();
         if (now.dist > 0 && pinch.dist > 0) {
           this.userZoom = THREE.MathUtils.clamp(this.userZoom * (pinch.dist / now.dist), ZOOM_MIN, ZOOM_MAX);
@@ -1590,6 +1655,8 @@ export class Stage {
       moved += Math.abs(dx) + Math.abs(dy);
       lx = e.clientX;
       ly = e.clientY;
+      // the close-up doesn't orbit: a sideways swipe moves on to the next seat (on release)
+      if (this.inCloseUp) return;
       if (panning) return panBy(dx, dy);
       this.dragYaw -= dx * 0.005;
       this.pitch = THREE.MathUtils.clamp(this.pitch + dy * 0.003, PITCH_MIN, PITCH_MAX);
@@ -1598,6 +1665,10 @@ export class Stage {
     const release = (e: PointerEvent) => {
       if (!pointers.delete(e.pointerId)) return;
       if (e.type === 'pointerup' && pointers.size === 0 && moved < 6 && e.button === 0) this.pick(e);
+      else if (e.type === 'pointerup' && pointers.size === 0 && this.inCloseUp && moved !== Infinity) {
+        const dx = e.clientX - sx;
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(e.clientY - sy) * 1.2) this.onSwipe?.(dx < 0 ? 1 : -1);
+      }
       pinch = null;
       // the finger left on the glass carries on orbiting from where it is
       const rest = [...pointers.values()][0];
@@ -1613,6 +1684,7 @@ export class Stage {
       'wheel',
       (e) => {
         e.preventDefault();
+        if (this.inCloseUp) return;
         this.userZoom = THREE.MathUtils.clamp(this.userZoom * (1 + e.deltaY * 0.001), ZOOM_MIN, ZOOM_MAX);
       },
       { passive: false },
@@ -1631,17 +1703,82 @@ export class Stage {
     }
   }
 
+  /**
+   * The close-up looks across the plaza at eye level, where the well, the old tree,
+   * the lantern posts and other players would stand in the way: whatever is on the
+   * line of sight moves to a layer the camera doesn't draw (their `visible`, which
+   * the game's own state rides on, is left alone; a lantern keeps its light).
+   */
+  private clearSightLine(close: boolean) {
+    if (!this.occluders) {
+      this.occluders = [
+        { meshes: this.meshesOf(this.town.well), at: () => this.town.well.position, r: 1.8, hidden: false },
+        { meshes: this.meshesOf(this.town.plazaTree.group), at: () => this.town.plazaTree.group.position, r: 2.2, hidden: false },
+        ...this.town.lanterns.map((l) => ({ meshes: this.meshesOf(l.parent!), at: () => l.parent!.position, r: 1.3, hidden: false })),
+        ...this.actors.flatMap((a) =>
+          [a.sprite, a.wolf, a.grave].map((m) => ({ meshes: [m], at: () => m.position, r: 0.9, hidden: false, actor: a.id })),
+        ),
+      ];
+    }
+    const from = new THREE.Vector2(this.camera.position.x, this.camera.position.z);
+    const to = new THREE.Vector2(this.camTarget.x, this.camTarget.z);
+    const seg = to.clone().sub(from);
+    const len2 = Math.max(seg.lengthSq(), 1e-6);
+    for (const o of this.occluders) {
+      let hide = false;
+      if (close && o.actor !== this.closeSeat) {
+        const at = o.at();
+        const p = new THREE.Vector2(at.x, at.z);
+        // strictly between the camera and the subject (the subject's neighbours behind it stay)
+        const k = p.clone().sub(from).dot(seg) / len2;
+        // players near the camera fill much of the frame: the nearer, the wider the berth
+        const r = o.actor === undefined ? o.r : o.r + 2.5 * (1 - k);
+        hide = k > 0 && k < 0.85 && p.distanceTo(from.clone().addScaledVector(seg, k)) < r;
+      }
+      if (hide === o.hidden) continue;
+      o.hidden = hide;
+      for (const m of o.meshes) {
+        if (hide) m.layers.set(HIDDEN_LAYER);
+        else m.layers.set(0);
+      }
+    }
+  }
+
+  private occluders: { meshes: THREE.Object3D[]; at: () => THREE.Vector3; r: number; hidden: boolean; actor?: number }[] | null = null;
+
+  private meshesOf(root: THREE.Object3D) {
+    const out: THREE.Object3D[] = [];
+    root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) out.push(o);
+    });
+    return out;
+  }
+
   private resize() {
     const w = this.host.clientWidth || window.innerWidth;
     const h = this.host.clientHeight || window.innerHeight;
-    this.camera.aspect = w / h;
+    const aspect = w / h;
+    this.camera.aspect = aspect;
+    // a tall (phone portrait) viewport keeps the landscape view's sideways reach by
+    // widening the lens (up to FOV_MAX), and only backs off for the rest: backing off
+    // alone would put the camera so far out that the night fog swallows the town
+    const fit = aspect < 1 ? FIT_ASPECT_PORTRAIT : FIT_ASPECT;
+    const want = Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * Math.max(1, fit / aspect);
+    const fov = Math.min(FOV_MAX, THREE.MathUtils.radToDeg(2 * Math.atan(want)));
+    this.wideFov = fov;
+    this.camera.fov = this.inCloseUp ? CLOSE_FOV : fov;
+    this.aspectFit = want / Math.tan(THREE.MathUtils.degToRad(fov / 2));
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
     const pr = this.renderer.getPixelRatio();
     (this.tiltH.uniforms.texel.value as THREE.Vector2).set(1 / (w * pr), 0);
     (this.tiltV.uniforms.texel.value as THREE.Vector2).set(0, 1 / (h * pr));
-    this.fx.setViewport(h * pr, this.camera.fov);
+    this.viewH = h * pr;
+    this.viewW = w;
+    this.viewHcss = h;
+    if (this.viewShift.lengthSq()) this.camera.setViewOffset(w, h, this.viewShift.x, this.viewShift.y, w, h);
+    this.fx.setViewport(this.viewH, this.camera.fov);
   }
 
   private frame() {
@@ -1654,6 +1791,8 @@ export class Stage {
     this.atmo.mix += (this.nightTarget - this.atmo.mix) * Math.min(1, dt * 0.8);
     const n = this.atmo.mix;
     this.atmo.update(dt, t);
+    // the fog is tuned for the landscape framing: thin it as far as a tall viewport backs off
+    (this.scene.fog as THREE.FogExp2).density /= this.aspectFit;
     this.fx.update(dt, t);
     this.shield.update(dt, t);
     this.magic.update(dt, t);
@@ -1700,16 +1839,62 @@ export class Stage {
     const focusPos = focusedActor ? this.anchor(focusedActor) : null;
     const focused = focusPos ? { base: focusPos.clone().setY(0) } : null;
     if (this.shot && t > this.shot.until) this.shot = null;
-    const tgt = this.shot
-      ? this.shot.target.clone().add(this.pan)
-      : (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
-    this.camTarget.lerp(tgt, Math.min(1, dt * 1.6));
-    // stay wide enough to keep most of the ring (and their bubbles) in view; a tall
-    // (phone portrait) viewport sees less sideways, so it backs off a bit further
-    const aspectFit = THREE.MathUtils.clamp(1.3 / this.camera.aspect, 1, 2.1);
-    const dist = (this.shot ? this.shot.dist : focused ? 34 : 40) * this.userZoom * aspectFit;
+    const close = this.inCloseUp;
+    let closeAt: THREE.Vector3 | null = null;
+    let closeDist = 0;
+    // the free part of the screen (below the top bar, above / beside the panels)
+    const W = this.viewW;
+    const H = this.viewHcss;
+    const fr = this.free ?? { left: 0, top: 0, right: W, bottom: H };
+    const freeH = Math.max(80, fr.bottom - fr.top);
+    if (close) {
+      // stand before the seat, looking out from the plaza: at them, their grave, or their door if indoors
+      const a = this.actors[this.closeSeat];
+      const at = this.anchor(a);
+      // indoors: step back far enough to take in the whole house
+      const subj = !at ? CLOSE_SUBJECT.house : a.wolf.visible ? CLOSE_SUBJECT.wolf : CLOSE_SUBJECT.person;
+      closeAt = (at ?? this.town.houses[a.id].doorstep).clone().setY(subj.aim);
+      // near enough that the subject fills most of the free height
+      const tan = Math.tan(THREE.MathUtils.degToRad(CLOSE_FOV / 2));
+      closeDist = THREE.MathUtils.clamp(subj.h / (CLOSE_FILL * (freeH / H) * 2 * tan), CLOSE_DIST_MIN, CLOSE_DIST_MAX);
+      this.yawGoal = Math.atan2(-closeAt.x, -closeAt.z) + CLOSE_YAW;
+      this.pitchGoal = CLOSE_PITCH;
+      if (!this.wasClose) {
+        this.pan.set(0, 0, 0);
+        this.dragYaw = Math.atan2(Math.sin(this.dragYaw), Math.cos(this.dragYaw));
+        this.dragReset = true;
+      }
+    } else if (this.wasClose && !this.shot) {
+      // back to the overview: frame the speaker as usual
+      if (this.focusId !== null) this.reframe(this.focusId);
+      else this.resetView(false);
+    }
+    this.wasClose = close;
+    // centre the subject in the free part of the screen, not behind the panels
+    const shiftGoal = close ? new THREE.Vector2(W / 2 - (fr.left + fr.right) / 2, H / 2 - (fr.top + fr.bottom) / 2) : new THREE.Vector2();
+    if (this.viewShift.distanceTo(shiftGoal) > 0.5) {
+      this.viewShift.lerp(shiftGoal, Math.min(1, dt * 2.5));
+      if (this.viewShift.length() < 0.5) {
+        this.viewShift.set(0, 0);
+        this.camera.clearViewOffset();
+      } else this.camera.setViewOffset(W, H, this.viewShift.x, this.viewShift.y, W, H);
+    }
+    const fovGoal = close ? CLOSE_FOV : this.wideFov;
+    if (Math.abs(this.camera.fov - fovGoal) > 0.01) {
+      this.camera.fov += (fovGoal - this.camera.fov) * Math.min(1, dt * 2);
+      this.camera.updateProjectionMatrix();
+      this.fx.setViewport(this.viewH, this.camera.fov);
+    }
+    const tgt = closeAt
+      ? closeAt
+      : this.shot
+        ? this.shot.target.clone().add(this.pan)
+        : (focused ? focused.base.clone().setY(1.2).multiplyScalar(0.5) : new THREE.Vector3(0, 1, 0)).add(this.pan);
+    this.camTarget.lerp(tgt, Math.min(1, dt * (close ? 2.4 : 1.6)));
+    // stay wide enough to keep most of the ring (and their bubbles) in view (see `resize`)
+    const dist = close ? closeDist : (this.shot ? this.shot.dist : focused ? 34 : 40) * this.userZoom * this.aspectFit;
     this.camDist += (dist - this.camDist) * Math.min(1, dt * 1.4);
-    const sway = Math.sin(t * 0.05) * 0.12;
+    const sway = Math.sin(t * 0.05) * (close ? 0.03 : 0.12);
     {
       // ease the framed heading the shortest way round (the idle sway is part of the final angle)
       const want = this.yawGoal - sway;
@@ -1732,6 +1917,7 @@ export class Stage {
       this.camTarget.z + Math.cos(this.yaw) * Math.cos(cp) * this.camDist,
     );
     this.camera.lookAt(this.camTarget);
+    this.clearSightLine(close);
     if (this.fx.shake > 0.01) {
       const s = this.fx.shake;
       this.camera.position.add(new THREE.Vector3((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s));
@@ -1750,8 +1936,14 @@ export class Stage {
       this.focusLight.intensity += (60 - this.focusLight.intensity) * Math.min(1, dt * 3);
     } else {
       ringMat.opacity += (0 - ringMat.opacity) * Math.min(1, dt * 4);
-      this.focusLight.intensity += (0 - this.focusLight.intensity) * Math.min(1, dt * 3);
     }
+    if (closeAt && !focused) {
+      // the close-up's subject (or their house, at night) is never left in the dark
+      const base = closeAt.clone().setY(0);
+      this.focusLight.position.set(base.x * 0.7, 9, base.z * 0.7);
+      this.focusLight.target.position.copy(base);
+      this.focusLight.intensity += (45 - this.focusLight.intensity) * Math.min(1, dt * 3);
+    } else if (!focused) this.focusLight.intensity += (0 - this.focusLight.intensity) * Math.min(1, dt * 3);
 
     // billboards face camera around Y
     for (const b of this.billboards) {
@@ -1768,7 +1960,7 @@ export class Stage {
     for (const p of [this.tiltH, this.tiltV]) {
       p.uniforms.focus.value += (focusY - p.uniforms.focus.value) * Math.min(1, dt * 3);
       // keep the towering cloud sharp instead of lost in the tilt-shift blur
-      p.uniforms.band.value = this.shot ? this.shot.band : focused ? 0.1 : 0.16;
+      p.uniforms.band.value = close ? 0.3 : this.shot ? this.shot.band : focused ? 0.1 : 0.16;
     }
     this.bloom.strength = THREE.MathUtils.lerp(0.35, 0.9, n) + this.atmo.lightning * 0.4 + this.fx.flash * 0.4;
     this.grade.uniforms.time.value = t;
