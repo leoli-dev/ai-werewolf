@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MockAgent } from '../ai/mockAgent';
 import { Game, circularOrder, nextSeat, type SceneCue } from './game';
-import { EXPLODE_CHOICE, GOD_ROLES, type Agent, type GameEvent, type PlayerView, type Role, type SpeechRequest, type TargetRequest, type WolfChatRequest } from './types';
+import { EXPLODE_CHOICE, GOD_ROLES, isWolf, type Agent, type GameEvent, type PlayerView, type Role, type SpeechRequest, type TargetRequest, type WolfChatRequest } from './types';
 
 const names = Array.from({ length: 12 }, (_, i) => `P${i + 1}`);
 
@@ -15,7 +15,7 @@ describe('Game engine', () => {
   it('deals the standard 12-player board', () => {
     const g = simulate(1);
     const counts = g.players.reduce<Record<string, number>>((m, p) => ((m[p.role] = (m[p.role] ?? 0) + 1), m), {});
-    expect(counts).toEqual({ werewolf: 4, villager: 4, seer: 1, witch: 1, hunter: 1, guard: 1 });
+    expect(counts).toEqual({ wolfKing: 1, werewolf: 3, villager: 4, seer: 1, witch: 1, hunter: 1, guard: 1 });
   });
 
   it('forces the human role when requested', () => {
@@ -45,8 +45,8 @@ describe('Game engine', () => {
     const k = simulate(3);
     kill(k, 3, (r) => r === 'werewolf');
     kill(k, 3, (r) => r === 'villager');
-    expect(k.checkWinner()).toBeNull(); // one wolf left: good has to finish the job
-    kill(k, 1, (r) => r === 'werewolf');
+    expect(k.checkWinner()).toBeNull(); // the 狼王 is still up: good has to finish the job
+    kill(k, 1, (r) => r === 'wolfKing');
     expect(k.checkWinner()).toBe('good');
     // both at once (same night) goes to the wolves
     kill(k, 1, (r) => r === 'villager');
@@ -73,7 +73,7 @@ describe('Game engine', () => {
       const pkSpeakers = (day: number) => g.events.filter((e) => e.day === day && e.speechKind === 'defense').map((e) => e.speaker);
       for (const { id, req, view } of requests) {
         // nobody targets themselves with a skill (the guard may guard themselves)
-        if (['seer', 'witchPoison', 'hunterShot', 'badge'].includes(req.action)) {
+        if (['seer', 'witchPoison', 'hunterShot', 'wolfKingShot', 'badge'].includes(req.action)) {
           expect(req.candidates).not.toContain(id);
         }
         if (req.action === 'guard' && view.guard?.lastGuarded != null) {
@@ -86,8 +86,9 @@ describe('Game engine', () => {
         }
         if (req.action === 'witchPoison') expect(view.witch?.hasPoison).toBe(true);
         if (req.action === 'hunterShot') expect(view.hunter?.hasShot).toBe(false);
-        // the dead only act to shoot (hunter) or hand on the badge (sheriff)
-        if (req.action === 'hunterShot' || req.action === 'badge') expect(view.self.alive).toBe(false);
+        if (req.action === 'wolfKingShot') expect(view.wolfKing?.hasShot).toBe(false);
+        // the dead only act to shoot (hunter / 狼王) or hand on the badge (sheriff)
+        if (['hunterShot', 'wolfKingShot', 'badge'].includes(req.action)) expect(view.self.alive).toBe(false);
         else expect(view.self.alive).toBe(true);
         if (req.action === 'badge') expect(view.sheriff).toBe(id);
         if (req.action === 'runForSheriff') {
@@ -116,7 +117,7 @@ describe('Game engine', () => {
       for (const e of g.events.filter((e) => e.type === 'wolfChat')) {
         expect(e.visibility.kind).toBe('private');
         if (e.visibility.kind === 'private') {
-          for (const id of e.visibility.to) expect(g.players[id].role).toBe('werewolf');
+          for (const id of e.visibility.to) expect(isWolf(g.players[id].role)).toBe(true);
         }
       }
     }
@@ -188,7 +189,7 @@ describe('Game engine', () => {
             if (r.kind !== 'speech') return 'pass';
             if (r.canExplode) {
               canExplodeSeen = true;
-              expect(g.players[id].role).toBe('werewolf');
+              expect(isWolf(g.players[id].role)).toBe(true);
             }
             if (r.purpose !== 'discussion') return '过。';
             if (r.day === 1) speakers.push(id);
@@ -198,7 +199,7 @@ describe('Game engine', () => {
                 exploder = id;
                 return { text: '我自爆。', explode: true };
               }
-              if (g.players[id].role !== 'werewolf') return { text: '我是好人。', explode: true };
+              if (!isWolf(g.players[id].role)) return { text: '我是好人。', explode: true };
             }
             return '过。';
           },
@@ -339,7 +340,7 @@ describe('Game engine', () => {
     const g = new Game({ names, humanSeat: 0, humanRole: 'werewolf', seed: 5, wolfChatRounds: 1 });
     g.setAgents(names.map((_, i) => ({ speak: async () => 'pass', choose: choose(i) })));
     await g.run().catch(() => {});
-    const wolves = g.players.filter((p) => p.role === 'werewolf').map((p) => p.id);
+    const wolves = g.players.filter((p) => isWolf(p.role)).map((p) => p.id);
     expect(order.at(-1)).toBe(0);
     expect(order.slice().sort((a, b) => a - b)).toEqual(wolves);
     expect(humanPrompt).toMatch(/^队友已投：/);
@@ -670,12 +671,64 @@ describe('Standard flow: day and night rules', () => {
         return undefined;
       });
       await g.run().catch(() => {});
-      const status = g.events.find((e) => e.text.startsWith('你的开枪状态'))?.text ?? '';
+      const status = g.events.find((e) => e.text.startsWith('你的开枪状态') && e.visibility.kind === 'private' && e.visibility.to.includes(hunter))?.text ?? '';
       expect(status).toContain(poisoned ? '不能开枪' : '可以开枪');
       expect(asked).toBe(!poisoned);
       expect(g.players[villager].alive).toBe(poisoned);
       // shot by day: the victim has last words
       if (!poisoned) expect(g.events.some((e) => e.speechKind === 'lastWords' && e.speaker === villager)).toBe(true);
+    }
+  });
+
+  it('the pack knows its 狼王; the seer checks the 狼王 as 狼人', () => {
+    const g = new Game({ names, humanSeat: -1, seed: 10 });
+    const king = idOf(g, 'wolfKing');
+    const wolf = idOf(g, 'werewolf');
+    expect(g.viewFor(wolf).known[king]).toBe('wolfKing');
+    expect(g.viewFor(king).known[wolf]).toBe('werewolf');
+    expect(g.viewFor(king).wolfKing).toEqual({ hasShot: false });
+    expect(g.viewFor(idOf(g, 'villager')).known[king]).toBeUndefined();
+  });
+
+  it('an exiled 狼王 shoots in the open; a poisoned or self-destructed 狼王 cannot', async () => {
+    for (const how of ['vote', 'poison', 'explode'] as const) {
+      const probe = new Game({ names, humanSeat: -1, seed: 10 });
+      const king = idOf(probe, 'wolfKing');
+      const seer = idOf(probe, 'seer');
+      let asked = false;
+      const g = scripted(
+        10,
+        (id, r) => {
+          stopAt(1)(r);
+          if (r.action === 'seer') expect(r.candidates).toContain(king);
+          if (r.action === 'seer') return king;
+          if (r.action === 'wolfKill') return null;
+          if (r.action === 'witchPoison') return how === 'poison' ? king : null;
+          if (r.action === 'runForSheriff') return null;
+          if (r.action === 'vote') return id === king ? null : king;
+          if (r.action === 'wolfKingShot') {
+            asked = true;
+            expect(r.candidates).not.toContain(king);
+            return seer;
+          }
+          return undefined;
+        },
+        (id, r) => (how === 'explode' && id === king && r.kind === 'speech' && r.canExplode ? { text: '我自爆。', explode: true } : '过。'),
+      );
+      await g.run().catch(() => {});
+      expect(g.state.seerChecks[king]).toBe('wolf');
+      const status = g.events.find((e) => e.text.startsWith('你的开枪状态') && e.visibility.kind === 'private' && e.visibility.to.includes(king))?.text ?? '';
+      expect(status).toContain(how === 'poison' ? '不能开枪' : '可以开枪');
+      expect(g.players[king].alive).toBe(false);
+      expect(asked).toBe(how === 'vote');
+      expect(g.state.wolfKingShot).toBe(true);
+      if (how === 'vote') {
+        expect(g.events.some((e) => e.text.includes('是狼王，开枪带走了'))).toBe(true);
+        expect(g.players[seer].alive).toBe(false);
+        expect(g.deathCauses()[seer]).toBe('wolfKing');
+        // shot by day: the victim has last words
+        expect(g.events.some((e) => e.speechKind === 'lastWords' && e.speaker === seer)).toBe(true);
+      } else expect(g.players[seer].alive).toBe(true);
     }
   });
 
@@ -707,7 +760,7 @@ describe('Standard flow: day and night rules', () => {
     const g = scripted(14, (_id, r) => {
       if (r.action === 'wolfKill') return villagers.find((v) => r.candidates.includes(v)) ?? null;
       if (r.action === 'vote' || r.action === 'revote') return villagers.find((v) => r.candidates.includes(v)) ?? null;
-      if (['guard', 'witchSave', 'witchPoison', 'runForSheriff', 'hunterShot', 'badge'].includes(r.action)) return null;
+      if (['guard', 'witchSave', 'witchPoison', 'runForSheriff', 'hunterShot', 'wolfKingShot', 'badge'].includes(r.action)) return null;
       return undefined;
     });
     expect(await g.run()).toBe('wolf');

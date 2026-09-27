@@ -1,8 +1,9 @@
-export type Role = 'werewolf' | 'villager' | 'seer' | 'witch' | 'hunter' | 'guard';
+export type Role = 'werewolf' | 'wolfKing' | 'villager' | 'seer' | 'witch' | 'hunter' | 'guard';
 export type Team = 'wolf' | 'good';
 
 export const ROLE_NAME: Record<Role, string> = {
   werewolf: '狼人',
+  wolfKing: '狼王',
   villager: '村民',
   seer: '预言家',
   witch: '女巫',
@@ -12,15 +13,23 @@ export const ROLE_NAME: Record<Role, string> = {
 
 export const GOD_ROLES: Role[] = ['seer', 'witch', 'hunter', 'guard'];
 
-/** 12 人局：4 狼 / 4 民 / 预言家 女巫 猎人 守卫（预女猎守） */
+/** 12 人局（狼王守卫）：狼王 + 3 狼 / 4 民 / 预言家 女巫 猎人 守卫 */
 export const STANDARD_BOARD: Role[] = [
-  'werewolf', 'werewolf', 'werewolf', 'werewolf',
+  'wolfKing', 'werewolf', 'werewolf', 'werewolf',
   'villager', 'villager', 'villager', 'villager',
   'seer', 'witch', 'hunter', 'guard',
 ];
 
+/** 狼人 or 狼王: a member of the pack (a seer's bare 'wolf' check is not a known role). */
+export function isWolf(role: Role | 'good' | 'wolf' | undefined): boolean {
+  return role === 'werewolf' || role === 'wolfKing';
+}
+
+/** Roles with a gun: they may shoot on the way out (not when poisoned or after a 自爆). */
+export const GUN_ROLES: Role[] = ['hunter', 'wolfKing'];
+
 export function teamOf(role: Role): Team {
-  return role === 'werewolf' ? 'wolf' : 'good';
+  return isWolf(role) ? 'wolf' : 'good';
 }
 
 export interface Player {
@@ -32,7 +41,7 @@ export interface Player {
   isHuman: boolean;
 }
 
-export type DeathCause = 'wolf' | 'poison' | 'hunter' | 'vote' | 'explode' | 'gm';
+export type DeathCause = 'wolf' | 'poison' | 'hunter' | 'wolfKing' | 'vote' | 'explode' | 'gm';
 
 export type Phase =
   | 'setup'
@@ -81,6 +90,8 @@ export type TargetAction =
   | 'guard'
   | 'wolfKill'
   | 'hunterShot'
+  /** 狼王出局开枪. */
+  | 'wolfKingShot'
   | 'witchSave'
   | 'witchPoison'
   /** 上警: candidates = [self]; picking yourself runs, skipping stays 警下. */
@@ -155,6 +166,7 @@ export interface PlayerView {
   sheriff: number | null;
   witch?: { hasAntidote: boolean; hasPoison: boolean };
   hunter?: { hasShot: boolean };
+  wolfKing?: { hasShot: boolean };
   guard?: { lastGuarded: number | null };
 }
 
