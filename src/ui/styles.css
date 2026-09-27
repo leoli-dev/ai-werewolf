@@ -110,7 +110,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 #topright { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }
 #topright .short { display: none; }
-#dock { display: none; }
+#dock, #seats, #closeup { display: none; }
 
 /* ── chat / transcript (right) ── */
 #chat { position: fixed; right: 16px; top: 64px; bottom: 16px; width: 380px; display: flex; flex-direction: column; }
@@ -317,7 +317,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
     --safe-b: env(safe-area-inset-bottom, 0px);
     --safe-l: env(safe-area-inset-left, 0px);
     --safe-r: env(safe-area-inset-right, 0px);
-    --top-h: calc(var(--safe-t) + 70px);
+    --top-h: calc(var(--safe-t) + 102px);
     --dock-h: calc(var(--safe-b) + 50px);
   }
   /* typing: the keyboard takes the dock's place */
@@ -339,6 +339,65 @@ button, input, select, textarea { font: inherit; color: inherit; }
   #topright .long { display: none; }
   #topright .short { display: inline; }
 
+  /* the 12 seats at a glance, under the top bar */
+  #seats {
+    display: flex; position: fixed; top: calc(var(--safe-t) + 66px); left: calc(var(--safe-l) + 6px); right: calc(var(--safe-r) + 6px);
+    height: 30px; gap: 2px;
+  }
+  .seat-chip {
+    flex: 1 1 0; min-width: 0; position: relative; padding: 0; cursor: pointer;
+    display: grid; place-items: center; font-family: var(--pixel); font-size: 11px; line-height: 1;
+    background: rgba(20, 17, 15, 0.9); border: 1px solid var(--edge); border-bottom: 3px solid var(--seat);
+  }
+  .seat-chip.dead { opacity: 0.4; text-decoration: line-through; }
+  .seat-chip.on { background: #5a3a1a; border-color: var(--gold); border-bottom-color: var(--seat); color: #fff1d0; }
+  .seat-chip.viewed { outline: 2px solid #f1e3c2; outline-offset: -1px; z-index: 1; }
+  .seat-chip .id { position: absolute; top: 1px; right: 1px; font-family: var(--serif); font-size: 8px; line-height: 1; color: var(--ink-dim); }
+  .seat-chip .id.wolf { color: var(--wolf); }
+  .seat-chip .id.god { color: #6fb3e0; }
+  .seat-chip .id.good { color: var(--good); }
+  .seat-chip .id.me { color: var(--gold); }
+  .seat-chip .id.mark { opacity: 0.75; text-decoration: underline dotted; }
+  .seat-chip .star { position: absolute; top: 0; left: 1px; font-size: 8px; color: #ffd24a; font-family: var(--serif); }
+  .seat-chip .said { position: absolute; bottom: 2px; left: 50%; width: 4px; height: 4px; margin-left: -2px; background: var(--seat); }
+
+  /* close-up: the viewed player's card (their words, readable), in place of the bubbles */
+  body.closeup #labels { display: none; }
+  body.closeup #closeup { display: flex; }
+  #app[data-sheet] #closeup, #app:has(#action textarea:focus) #closeup { display: none; }
+  #closeup {
+    position: fixed; left: calc(var(--safe-l) + 6px); right: calc(var(--safe-r) + 6px);
+    bottom: calc(var(--dock-h) + var(--kb, 0px) + var(--action-h, 0px) + 6px);
+    max-height: calc(100dvh - var(--top-h) - var(--dock-h) - var(--kb, 0px) - var(--action-h, 0px) - 40dvh);
+    min-height: 96px; align-items: stretch; background: rgba(20, 17, 15, 0.94); touch-action: pan-y;
+  }
+  #closeup .nav { flex: none; width: 34px; background: transparent; border: none; font-size: 28px; color: var(--ink-dim); cursor: pointer; padding: 0; }
+  #closeup .nav:active { color: var(--gold); }
+  #closeup .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
+  #closeup .head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 15px; }
+  #closeup .head .n { font-family: var(--pixel); font-size: 12px; min-width: 22px; height: 22px; display: inline-grid; place-items: center; color: #221a14; border: 2px solid; }
+  #closeup .head .name { font-weight: 700; }
+  #closeup .head .star { color: #ffd24a; font-size: 12px; }
+  #closeup .head .tag { font-size: 12px; color: var(--ink-dim); }
+  #closeup .head .tag.wolf { color: var(--wolf); }
+  #closeup .head .tag.god, #closeup .head .tag.good { color: var(--good); }
+  #closeup .head .tag.me { color: var(--gold); }
+  #closeup .head .mark { font: inherit; font-size: 12px; line-height: 1.4; padding: 0 8px; min-height: 26px; cursor: pointer; color: var(--ink-faint); background: transparent; border: 1px dashed var(--edge); }
+  #closeup .head .mark.set { font-weight: 700; border-color: currentColor; }
+  #closeup .head .mark.good { color: var(--good); }
+  #closeup .head .mark.god { color: #6fb3e0; }
+  #closeup .head .mark.wolf { color: var(--wolf); }
+  #closeup .head .status { margin-left: auto; font-size: 12px; color: var(--gold); }
+  #closeup .head .status.out { color: var(--ink-faint); }
+  #closeup .words {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; font-size: 15px; line-height: 1.6;
+    padding: 8px 10px; color: #221a14; border: 2px solid; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  #closeup .words .when { font-size: 11px; opacity: 0.7; margin-bottom: 2px; }
+  #closeup .words.empty, #closeup .words.thinking { color: var(--ink-faint); border: 1px dashed var(--edge); background: transparent; font-size: 13px; }
+  #closeup .words.thinking { font-size: 20px; letter-spacing: 0.3em; }
+  #closeup .history { align-self: flex-end; font-size: 12px; padding: 2px 0; }
+
   /* bottom dock */
   #dock {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: var(--dock-h);
@@ -350,6 +409,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
     background: #1d1713; border: 2px solid var(--edge); font-size: 14px; letter-spacing: 0.1em; cursor: pointer;
   }
   .dock-tab.on { background: #3a2c20; border-color: var(--gold); color: #fff1d0; }
+  .dock-tab.view { flex: 0 0 64px; font-size: 13px; letter-spacing: 0.05em; color: var(--ink-dim); }
   .dock-role { font-size: 12px; font-weight: 900; letter-spacing: 0.04em; }
   .dock-role.wolf { color: var(--wolf); }
   .dock-role.good { color: var(--gold); }
@@ -433,4 +493,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
   #action { right: auto; bottom: calc(var(--safe-b) + var(--kb, 0px)); width: min(560px, 52vw); max-height: calc(100dvh - var(--top-h) - var(--kb, 0px)); border-width: 2px 2px 0 0; }
   .roster { grid-template-columns: 1fr 1fr 1fr; }
   #dock { left: auto; width: min(400px, 46vw); border-width: 2px 0 0 2px; }
+  #seats { top: calc(var(--safe-t) + 8px); left: auto; right: calc(var(--safe-r) + 150px); width: min(360px, 34vw); height: 28px; }
+  #closeup { left: auto; width: min(400px, 46vw); bottom: calc(var(--dock-h) + var(--kb, 0px) + 6px); max-height: calc(100dvh - var(--top-h) - var(--dock-h) - var(--kb, 0px) - 12px); }
 }

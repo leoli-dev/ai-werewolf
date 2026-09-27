@@ -65,6 +65,23 @@ const MOBILE = window.matchMedia('(max-width: 760px), (max-height: 520px)');
 /** Mobile: which sheet is pulled up over the scene. */
 type Sheet = 'none' | 'players' | 'chat';
 
+/** Mobile: eye-level close-up of one seat (default) or the desktop's overview. */
+const VIEW_KEY = 'ai-werewolf:mobile-view';
+function readClosePref(): boolean {
+  try {
+    return localStorage.getItem(VIEW_KEY) !== 'overview';
+  } catch {
+    return true;
+  }
+}
+function writeClosePref(close: boolean) {
+  try {
+    localStorage.setItem(VIEW_KEY, close ? 'close' : 'overview');
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * One clearly different bubble colour per seat (12 distinct colour families,
  * ordered so neighbouring seats never look alike), reused in the chat log.
@@ -160,6 +177,20 @@ export class GameUI {
   private engineStats = { ok: 0, fail: 0, fallback: 0, lastMs: 0 };
   private dock!: HTMLElement;
   private sheet: Sheet = 'none';
+  /** Mobile: the 12 seats at a glance under the top bar (tap one to look at them). */
+  private strip!: HTMLElement;
+  private stripKey = '';
+  /** Mobile close-up: the card with the viewed player's name, identity and latest words. */
+  private card!: HTMLElement;
+  private cardKey = '';
+  /** When the strip / card last checked for changes (a few times a second is plenty). */
+  private panelsAt = 0;
+  /** Mobile: close-up (eye level, one seat at a time) rather than the overview. */
+  private closePref = readClosePref();
+  /** The seat the close-up stands before. */
+  private viewSeat: number;
+  /** The last seat the close-up moved to by itself (the speaker / actor); a swipe overrides until the next one. */
+  private autoSeat: number | null = null;
   private unread = 0;
   /** Label tapped last (touch has no hover to bring a buried bubble to the front). */
   private raised: number | null = null;
@@ -197,6 +228,7 @@ export class GameUI {
     private opts: GameUIOptions,
   ) {
     this.restoring = opts.restoring;
+    this.viewSeat = me;
     this.playedMs = opts.elapsedMs;
     this.marks = game.players.map((_, i) => opts.marks?.[i] ?? null);
     this.build();
@@ -206,6 +238,8 @@ export class GameUI {
     };
     stage.onFrame = (p) => this.placeLabels(p);
     stage.onPick = (id) => this.pick(id);
+    stage.onSwipe = (d) => this.setView(this.viewSeat + d);
+    stage.view(me);
     stage.highlightSelf(me);
   }
 
@@ -304,7 +338,9 @@ export class GameUI {
 
     this.stepEl = h('div', { id: 'nightstep', 'aria-live': 'polite' });
     this.dock = h('nav', { id: 'dock', class: 'panel', 'aria-label': '面板' });
-    this.root.append(this.hud, this.banner, topright, chat, this.action, this.stepEl, this.dock);
+    this.strip = h('nav', { id: 'seats', 'aria-label': '座位' });
+    this.card = h('section', { id: 'closeup', class: 'panel', 'aria-live': 'polite' });
+    this.root.append(this.hud, this.banner, topright, this.strip, chat, this.card, this.action, this.stepEl, this.dock);
     this.bindMobile();
 
     for (let i = 0; i < 12; i++) {
@@ -418,6 +454,7 @@ export class GameUI {
     }
     const onMedia = () => {
       if (!MOBILE.matches) this.setSheet('none');
+      this.applyView();
     };
     MOBILE.addEventListener('change', onMedia);
     this.cleanups.push(() => MOBILE.removeEventListener('change', onMedia));
@@ -428,6 +465,17 @@ export class GameUI {
     };
     this.labelsRoot.addEventListener('pointerdown', onLabelTap);
     this.cleanups.push(() => this.labelsRoot.removeEventListener('pointerdown', onLabelTap));
+    // the card swipes like the scene: left for the next seat, right for the one before
+    let start: { x: number; y: number } | null = null;
+    this.card.addEventListener('pointerdown', (e) => (start = { x: e.clientX, y: e.clientY }));
+    this.card.addEventListener('pointerup', (e) => {
+      if (!start) return;
+      const dx = e.clientX - start.x;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(e.clientY - start.y) * 1.2) this.setView(this.viewSeat + (dx < 0 ? 1 : -1));
+      start = null;
+    });
+    this.card.addEventListener('pointercancel', () => (start = null));
+    this.applyView();
     this.renderDock();
   }
 
@@ -457,6 +505,170 @@ export class GameUI {
     this.dock.replaceChildren(
       tab('players', h('span', { class: `dock-role ${isWolf(me.role) ? 'wolf' : 'good'}` }, `${this.me + 1}号 ${ROLE_NAME[me.role]}`), '玩家'),
       tab('chat', '记录', this.unread ? h('span', { class: 'badge' }, this.unread > 99 ? '99+' : String(this.unread)) : null),
+      h(
+        'button',
+        {
+          class: 'dock-tab view',
+          title: this.closePref ? '切换到俯瞰全景' : '切换到人物近景',
+          onclick: () => {
+            this.closePref = !this.closePref;
+            writeClosePref(this.closePref);
+            this.applyView();
+            this.renderDock();
+          },
+        },
+        this.closePref ? '全景' : '近景',
+      ),
+    );
+  }
+
+  // ───────────────────────── mobile close-up ─────────────────────────
+
+  /** Close-up on a phone (unless the player picked the overview); the desktop keeps the overview. */
+  private applyView() {
+    this.stage.closeUp = MOBILE.matches && this.closePref;
+    this.cardKey = '';
+  }
+
+  /** Look at seat `id` (wraps round the ring). */
+  private setView(id: number) {
+    const n = this.game.players.length;
+    this.viewSeat = ((id % n) + n) % n;
+    this.stage.view(this.viewSeat);
+    this.cardKey = '';
+    this.stripKey = '';
+    if (MOBILE.matches) {
+      this.renderStrip();
+      if (this.stage.inCloseUp) this.renderCard();
+    }
+  }
+
+  /** The close-up moves on to whoever is now speaking / acting (a swipe holds only until then). */
+  private follow(id: number | null) {
+    if (id === null || id === this.autoSeat) return;
+    this.autoSeat = id;
+    this.setView(id);
+  }
+
+  /** Short identity for a seat chip: 狼 / 神 / 民 / 好, from the system's info or the human's mark. */
+  private shortIdentity(id: number): { text: string; cls: string; mark: boolean } | null {
+    if (id === this.me) return { text: '我', cls: 'me', mark: false };
+    const k = this.knownOf(id);
+    if (k) {
+      const text = k.cls === 'wolf' ? '狼' : k.cls === 'god' ? '神' : k.ring === 'good' ? '好' : '民';
+      return { text, cls: k.cls === 'good' && k.ring === 'good' ? 'good' : k.cls, mark: false };
+    }
+    const m = this.marks[id];
+    return m ? { text: MARK_NAME[m], cls: MARK_CLS[m], mark: true } : null;
+  }
+
+  /** Who is on (speaking / acting / being read), for the seat strip and the card. */
+  private onSeat(): number | null {
+    return this.readingSpeaker() ?? this.visibleActor();
+  }
+
+  private renderStrip() {
+    const on = this.onSeat();
+    const sheriff = this.game.state.sheriff;
+    const key = this.game.players
+      .map((p, i) => `${p.alive || this.revived}${this.shortIdentity(i)?.text}${this.marks[i]}${this.bubbles.has(i)}`)
+      .join('|') + `|${on}|${this.viewSeat}|${sheriff}|${this.stage.inCloseUp}`;
+    if (key === this.stripKey) return;
+    this.stripKey = key;
+    this.strip.replaceChildren(
+      ...this.game.players.map((p, i) => {
+        const id = this.shortIdentity(i);
+        const alive = p.alive || this.revived;
+        return h(
+          'button',
+          {
+            class: `seat-chip ${alive ? '' : 'dead'} ${on === i ? 'on' : ''} ${this.stage.inCloseUp && this.viewSeat === i ? 'viewed' : ''}`,
+            style: `--seat:${bubbleColor(i).bg}`,
+            title: `${seat(i)} ${p.name}`,
+            'aria-label': `查看 ${seat(i)} ${p.name}`,
+            onclick: () => {
+              if (!this.closePref) {
+                this.closePref = true;
+                writeClosePref(true);
+                this.applyView();
+                this.renderDock();
+              }
+              this.setView(i);
+            },
+          },
+          String(i + 1),
+          id ? h('span', { class: `id ${id.cls} ${id.mark ? 'mark' : ''}` }, id.text) : null,
+          sheriff === i ? h('span', { class: 'star' }, '★') : null,
+          this.bubbles.has(i) ? h('span', { class: 'said' }) : null,
+        );
+      }),
+    );
+  }
+
+  /** The viewed player's latest words: the bubble over their head, else the last thing they said that you saw. */
+  private latestWords(id: number): { text: string; when: string } | null {
+    const b = this.bubbles.get(id);
+    if (b) return { text: b.text, when: '' };
+    for (let k = this.game.events.length - 1; k >= 0; k--) {
+      const e = this.game.events[k];
+      if (e.speaker !== id || (e.type !== 'speech' && e.type !== 'wolfChat') || !this.canSee(e)) continue;
+      const when = e.type === 'wolfChat' ? `第 ${e.day} 夜 · 狼队频道` : `第 ${e.day} 天${e.phase === 'election' ? ' · 警上' : ''}`;
+      return { text: e.text, when };
+    }
+    return null;
+  }
+
+  private renderCard() {
+    const i = this.viewSeat;
+    const p = this.game.players[i];
+    const on = this.onSeat();
+    const actor = this.visibleActor();
+    // the human's own turn isn't "thinking": their words stay up and the card says it's them
+    const mine = i === this.me && actor === i;
+    const thinking = ((actor === i && this.held?.speaker !== i) || this.ceremonyThinking === i) && !mine;
+    const words = thinking ? null : this.latestWords(i);
+    const alive = p.alive || this.revived;
+    const key = `${i}|${alive}|${on}|${thinking}|${this.waitingFor}|${words?.text}|${this.identityOf(i)?.text}|${this.marks[i]}|${this.game.state.sheriff}|${this.stage.inCloseUp}`;
+    if (key === this.cardKey) return;
+    this.cardKey = key;
+    const k = this.knownOf(i);
+    const c = bubbleColor(i);
+    const status = !alive ? '已出局' : mine ? '轮到你' : thinking ? (this.waitingFor === i ? '正在思考中…' : '思考中…') : on === i ? '发言中' : '';
+    const text = thinking
+      ? h('div', { class: 'words thinking' }, '…')
+      : words
+        ? h('div', { class: 'words', style: bubbleStyle(i) }, words.when ? h('div', { class: 'when' }, words.when) : null, words.text)
+        : h('div', { class: 'words empty' }, '暂无发言');
+    this.card.replaceChildren(
+      h('button', { class: 'nav prev', 'aria-label': '上一位', onclick: () => this.setView(i - 1) }, '‹'),
+      h(
+        'div',
+        { class: 'body' },
+        h(
+          'div',
+          { class: 'head' },
+          h('span', { class: 'n', style: `background:${c.bg};border-color:${c.edge}` }, String(i + 1)),
+          h('span', { class: 'name' }, p.name, i === this.me ? '（你）' : ''),
+          this.game.state.sheriff === i ? h('span', { class: 'star' }, '★警长') : null,
+          k ? h('span', { class: `tag ${k.cls}` }, k.text) : i === this.me ? null : this.markCell(i, false),
+          status ? h('span', { class: `status ${alive ? '' : 'out'}` }, status) : null,
+        ),
+        text,
+        h(
+          'button',
+          {
+            class: 'link history',
+            onclick: () => {
+              this.playerFilter = i;
+              this.renderRoster();
+              this.renderChat();
+              this.setSheet('chat');
+            },
+          },
+          'TA 的全部发言 ›',
+        ),
+      ),
+      h('button', { class: 'nav next', 'aria-label': '下一位', onclick: () => this.setView(i + 1) }, '›'),
     );
   }
 
@@ -563,6 +775,9 @@ export class GameUI {
     this.unsubConfig();
     for (const off of this.cleanups) off();
     delete this.root.dataset.sheet;
+    document.body.classList.remove('closeup');
+    this.stage.closeUp = false;
+    this.stage.onSwipe = undefined;
     for (const v of ['--action-h', '--kb']) this.root.style.removeProperty(v);
     clearInterval(this.actorTimer);
     clearInterval(this.clockTimer);
@@ -608,6 +823,7 @@ export class GameUI {
     }
     else if (e.type === 'vote') this.unreadSpeech = false;
     this.trackBubble(e);
+    if ((e.type === 'speech' || e.type === 'wolfChat') && e.speaker !== undefined) this.follow(e.speaker);
     if (e.type === 'speech' || e.type === 'vote') {
       this.renderActor();
       this.renderRoster();
@@ -677,6 +893,13 @@ export class GameUI {
     this.stage.setNight(night);
     audio.setNight(night);
     this.stage.focus(this.cameraTarget());
+    // nightfall: the close-up goes home to your own door (unless your role is up)
+    if (night && !this.lastPhase.endsWith(':night')) {
+      this.autoSeat = null;
+      this.setView(this.me);
+    }
+    // only speeches move the close-up: votes and quick decisions come too fast to follow
+    if (s.actorSpeaks || this.readingSpeaker() !== null) this.follow(this.cameraTarget());
     this.choreograph(s);
     const phaseName: Record<string, string> = {
       setup: '准备中',
@@ -1135,6 +1358,17 @@ export class GameUI {
   // ───────────────────────── labels ─────────────────────────
 
   private placeLabels(pos: ScreenPos[]) {
+    if (MOBILE.matches) {
+      // the close-up has the card for words; the name plates come back for the wide shots
+      const close = this.stage.inCloseUp;
+      const now = performance.now();
+      if (close !== document.body.classList.contains('closeup') || now - this.panelsAt > 200) {
+        this.panelsAt = now;
+        document.body.classList.toggle('closeup', close);
+        this.renderStrip();
+        if (close) this.renderCard();
+      }
+    } else document.body.classList.remove('closeup');
     const actor = this.visibleActor();
     pos.forEach((p, i) => {
       const el = this.labelEls[i];
