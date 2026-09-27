@@ -365,7 +365,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   body.closeup #labels { display: none; }
   body.closeup #closeup { display: flex; }
   /* picking a target: the seat strip says who is who; give the scene the room */
-  #app[data-sheet] #closeup, #app:has(#action textarea:focus) #closeup, #app:has(#action.show .targets) #closeup { display: none; }
+  #app[data-sheet] #closeup, #app:has(#action textarea:focus) #closeup, #app:has(#action.show .targets) #closeup,
+  #app:has(#action.show textarea) #closeup { display: none; }
   #closeup {
     position: fixed; left: calc(var(--safe-l) + 6px); right: calc(var(--safe-r) + 6px);
     bottom: calc(var(--dock-h) + var(--kb, 0px) + var(--action-h, 0px) + 6px);

@@ -83,12 +83,13 @@ export interface TownRefs {
   fliesSpots: THREE.Vector3[];
   /** The old dead tree by the well (it blossoms when the village wins). */
   plazaTree: { group: THREE.Group; height: number; bark: THREE.MeshStandardMaterial };
+  well: THREE.Object3D;
 }
 
 export function buildTown(): TownRefs {
   const rng = new Rng(42);
   const root = new THREE.Group();
-  const refs: Omit<TownRefs, 'plazaTree'> = { root, houses: [], windows: [], lanterns: [], lanternFlames: [], billboards: [], perches: [], fliesSpots: [] };
+  const refs: Omit<TownRefs, 'plazaTree' | 'well'> = { root, houses: [], windows: [], lanterns: [], lanternFlames: [], billboards: [], perches: [], fliesSpots: [] };
 
   // ground
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), mat('grass', [60, 60]));
@@ -214,10 +215,10 @@ export function buildTown(): TownRefs {
     root.add(h);
   }
 
-  return { ...refs, plazaTree };
+  return { ...refs, plazaTree, well };
 }
 
-function house(i: number, rng: Rng, refs: Omit<TownRefs, 'plazaTree'>): THREE.Group {
+function house(i: number, rng: Rng, refs: Omit<TownRefs, 'plazaTree' | 'well'>): THREE.Group {
   const g = new THREE.Group();
   const w = 4.2 + rng.next() * 1.2;
   const d = 3.6 + rng.next() * 0.8;
@@ -483,7 +484,7 @@ function crate(rng: Rng): THREE.Mesh {
   return shadowy(c);
 }
 
-function lantern(refs: Omit<TownRefs, 'plazaTree'>): THREE.Group {
+function lantern(refs: Omit<TownRefs, 'plazaTree' | 'well'>): THREE.Group {
   const g = new THREE.Group();
   const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.6, 0.14), new THREE.MeshStandardMaterial({ color: 0x1e1814 }));
   post.position.y = 1.3;
@@ -506,7 +507,7 @@ function lantern(refs: Omit<TownRefs, 'plazaTree'>): THREE.Group {
   return g;
 }
 
-function churchMesh(refs: Omit<TownRefs, 'plazaTree'>): THREE.Group {
+function churchMesh(refs: Omit<TownRefs, 'plazaTree' | 'well'>): THREE.Group {
   const g = new THREE.Group();
   const stone = mat('stone', [3, 2], 11);
   const nave = new THREE.Mesh(new THREE.BoxGeometry(8, 6, 13), stone);

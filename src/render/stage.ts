@@ -156,6 +156,8 @@ const FIT_ASPECT_PORTRAIT = 1.55;
 const FOV_MAX = 66;
 /** Phone close-up: an eye-level shot of one seat. */
 const CLOSE_FOV = 42;
+/** Layer for whatever blocks the close-up's line of sight: the camera doesn't draw it. */
+const HIDDEN_LAYER = 5;
 const CLOSE_PITCH = 0.12;
 const CLOSE_YAW = 0.2;
 /** What the close-up frames (world units): a villager, the werewolf form, a house (its owner indoors). */
@@ -1702,15 +1704,20 @@ export class Stage {
   }
 
   /**
-   * The close-up looks across the plaza at eye level, where the old tree and the
-   * lantern posts would stand in the way: hide whichever is on the line of sight
-   * (its meshes only, so the lantern's light stays on).
+   * The close-up looks across the plaza at eye level, where the well, the old tree,
+   * the lantern posts and other players would stand in the way: whatever is on the
+   * line of sight moves to a layer the camera doesn't draw (their `visible`, which
+   * the game's own state rides on, is left alone; a lantern keeps its light).
    */
   private clearSightLine(close: boolean) {
     if (!this.occluders) {
       this.occluders = [
-        { meshes: this.meshesOf(this.town.plazaTree.group), at: this.town.plazaTree.group.position, r: 2.2, hidden: false },
-        ...this.town.lanterns.map((l) => ({ meshes: this.meshesOf(l.parent!), at: l.parent!.position, r: 1.3, hidden: false })),
+        { meshes: this.meshesOf(this.town.well), at: () => this.town.well.position, r: 1.8, hidden: false },
+        { meshes: this.meshesOf(this.town.plazaTree.group), at: () => this.town.plazaTree.group.position, r: 2.2, hidden: false },
+        ...this.town.lanterns.map((l) => ({ meshes: this.meshesOf(l.parent!), at: () => l.parent!.position, r: 1.3, hidden: false })),
+        ...this.actors.flatMap((a) =>
+          [a.sprite, a.wolf, a.grave].map((m) => ({ meshes: [m], at: () => m.position, r: 0.9, hidden: false, actor: a.id })),
+        ),
       ];
     }
     const from = new THREE.Vector2(this.camera.position.x, this.camera.position.z);
@@ -1719,18 +1726,25 @@ export class Stage {
     const len2 = Math.max(seg.lengthSq(), 1e-6);
     for (const o of this.occluders) {
       let hide = false;
-      if (close) {
-        const p = new THREE.Vector2(o.at.x, o.at.z);
-        const k = THREE.MathUtils.clamp(p.clone().sub(from).dot(seg) / len2, 0, 1);
-        hide = k > 0 && k < 1 && p.distanceTo(from.clone().addScaledVector(seg, k)) < o.r;
+      if (close && o.actor !== this.closeSeat) {
+        const at = o.at();
+        const p = new THREE.Vector2(at.x, at.z);
+        // strictly between the camera and the subject (the subject's neighbours behind it stay)
+        const k = p.clone().sub(from).dot(seg) / len2;
+        // players near the camera fill much of the frame: the nearer, the wider the berth
+        const r = o.actor === undefined ? o.r : o.r + 2.5 * (1 - k);
+        hide = k > 0 && k < 0.85 && p.distanceTo(from.clone().addScaledVector(seg, k)) < r;
       }
       if (hide === o.hidden) continue;
       o.hidden = hide;
-      for (const m of o.meshes) m.visible = !hide;
+      for (const m of o.meshes) {
+        if (hide) m.layers.set(HIDDEN_LAYER);
+        else m.layers.set(0);
+      }
     }
   }
 
-  private occluders: { meshes: THREE.Object3D[]; at: THREE.Vector3; r: number; hidden: boolean }[] | null = null;
+  private occluders: { meshes: THREE.Object3D[]; at: () => THREE.Vector3; r: number; hidden: boolean; actor?: number }[] | null = null;
 
   private meshesOf(root: THREE.Object3D) {
     const out: THREE.Object3D[] = [];
