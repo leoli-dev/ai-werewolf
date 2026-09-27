@@ -717,8 +717,9 @@ describe('Standard flow: day and night rules', () => {
       );
       await g.run().catch(() => {});
       expect(g.state.seerChecks[king]).toBe('wolf');
-      const status = g.events.find((e) => e.text.startsWith('你的开枪状态') && e.visibility.kind === 'private' && e.visibility.to.includes(king))?.text ?? '';
-      expect(status).toContain(how === 'poison' ? '不能开枪' : '可以开枪');
+      // no night turn of its own: never woken alone, never told a shot status
+      expect(g.events.some((e) => e.text.startsWith('狼王请睁眼'))).toBe(false);
+      expect(g.events.some((e) => e.text.startsWith('你的开枪状态') && e.visibility.kind === 'private' && e.visibility.to.includes(king))).toBe(false);
       expect(g.players[king].alive).toBe(false);
       expect(asked).toBe(how === 'vote');
       expect(g.state.wolfKingShot).toBe(true);

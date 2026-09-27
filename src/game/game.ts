@@ -67,8 +67,8 @@ export interface GameState {
   sheriff: number | null;
 }
 
-/** 狼王守卫 wake order: 守卫 → 狼人 → 女巫 → 预言家 → 猎人 → 狼王. */
-export type NightStep = 'guard' | 'wolves' | 'witch' | 'seer' | 'hunter' | 'wolfKing';
+/** Wake order: 守卫 → 狼人 → 女巫 → 预言家 → 猎人 (the 狼王 has no turn of its own: it wakes with the pack). */
+export type NightStep = 'guard' | 'wolves' | 'witch' | 'seer' | 'hunter';
 
 /**
  * A night role's action (or a 猎人 / 狼王 shot), staged for whoever may see it:
@@ -569,15 +569,6 @@ export class Game {
     if (!(hunter?.alive && !this.state.hunterShot)) await this.idleTurn();
     else {
       this.gm(`你的开枪状态：${poisoned === hunter.id ? '不能开枪' : '可以开枪'}。`, [hunter.id]);
-      await this.pace();
-    }
-
-    // 6. 狼王：同猎人，只确认开枪状态（被毒不能开枪）
-    const king = this.byRole('wolfKing');
-    this.announceStep('wolfKing', '狼王请睁眼，确认你的开枪状态。');
-    if (!(king?.alive && !this.state.wolfKingShot)) await this.idleTurn();
-    else {
-      this.gm(`你的开枪状态：${poisoned === king.id ? '不能开枪' : '可以开枪'}。`, [king.id]);
       await this.pace();
     }
 

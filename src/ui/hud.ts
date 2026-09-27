@@ -110,7 +110,6 @@ const NIGHT_STEP_NAME: Record<NightStep, string> = {
   seer: '预言家轮',
   wolves: '狼人轮',
   hunter: '猎人轮',
-  wolfKing: '狼王轮',
   witch: '女巫轮',
 };
 
