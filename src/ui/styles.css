@@ -207,6 +207,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .reveal { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .reveal div { font-size: 12px; padding: 6px; border: 1px solid var(--edge); background: #16120f; }
 .reveal .wolf { color: var(--wolf); }
+.reveal .style { display: block; margin-top: 2px; font-size: 11px; opacity: 0.7; }
 
 .toast { position: fixed; left: 50%; top: 84px; transform: translateX(-50%); padding: 6px 14px; font-size: 12px; color: var(--wolf); z-index: 5; pointer-events: none; }
 

@@ -7,6 +7,7 @@ const NOTE_TAG: Record<TargetAction, string> = {
 };
 import type { AwardVote, ReviewContext, ReviewResult, Reviewer } from '../game/ceremony';
 import { MockAgent, type MockSnapshot } from './mockAgent';
+import type { Playstyle } from './playstyles';
 import { REVIEW_TASK, awardVoteTask, parseAwardVote, reviewSystemPrompt, reviewUserPrompt } from './review';
 import { cleanSpeech, parseExplode, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
 import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
@@ -45,8 +46,10 @@ export class LLMAgent implements Agent, Reviewer {
     private provider: OpenAICompatibleProvider,
     private queue: SerialQueue,
     private telemetry: AgentTelemetry = {},
+    /** 打法风格 dealt for this game (悍跳狼, 装神民…); the rule AI fallback plays it too. */
+    readonly style: Playstyle | null = null,
   ) {
-    this.fallback = new MockAgent(id * 7919);
+    this.fallback = new MockAgent(id * 7919, 0, style);
   }
 
   snapshot(): LLMSnapshot {
@@ -61,7 +64,7 @@ export class LLMAgent implements Agent, Reviewer {
   private messages(view: PlayerView, task: string): ChatMessage[] {
     const election = sharedNotebook(view, { election: true });
     return [
-      { role: 'system', content: systemPrompt(view, this.persona) },
+      { role: 'system', content: systemPrompt(view, this.persona, this.style) },
       {
         role: 'user',
         content: [
@@ -126,7 +129,7 @@ export class LLMAgent implements Agent, Reviewer {
 
   private reviewMessages(ctx: ReviewContext, task: string): ChatMessage[] {
     return [
-      { role: 'system', content: reviewSystemPrompt(ctx, this.persona) },
+      { role: 'system', content: reviewSystemPrompt(ctx, this.persona, this.style) },
       { role: 'user', content: reviewUserPrompt(ctx, task) },
     ];
   }

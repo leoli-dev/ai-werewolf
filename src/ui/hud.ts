@@ -210,6 +210,7 @@ export class GameUI {
   private exileWait: (() => void) | null = null;
   private cleanups: (() => void)[] = [];
   /** 颁奖典礼: who takes part (null = the human), and the AIs' own notes. */
+  private playstyles: (string | null)[] = [];
   private reviewers: { list: (Reviewer | null)[]; notes: () => (string[] | null)[] } | null = null;
   /** The ceremony has started: its log, and everyone is standing again. */
   private ceremonyLog: CeremonyEntry[] | null = null;
@@ -1590,6 +1591,11 @@ export class GameUI {
   }
 
   /** Who takes part in the 颁奖典礼 (the human's own seat is null: they are asked through the panel). */
+  /** Each AI's 打法风格 (null for the human), shown when the roles are revealed. */
+  setPlaystyles(names: (string | null)[]) {
+    this.playstyles = names;
+  }
+
   setReviewers(list: (Reviewer | null)[], notes: () => (string[] | null)[]) {
     this.reviewers = { list, notes };
   }
@@ -1681,7 +1687,7 @@ export class GameUI {
           { class: 'modal panel' },
           h('div', { class: `winner ${s.winner}` }, s.winner === 'good' ? '好人胜利' : '狼人胜利'),
           h('p', { style: 'text-align:center' }, won ? '你所在的阵营赢得了这座小镇。' : '你所在的阵营输掉了这一局。'),
-          h('div', { class: 'reveal' }, ...this.game.players.map((p) => h('div', { class: teamOf(p.role) === 'wolf' ? 'wolf' : '' }, `${seat(p.id)} ${p.name}`, h('br'), `${ROLE_NAME[p.role]}${p.alive ? '' : ' ✝'}`))),
+          h('div', { class: 'reveal' }, ...this.game.players.map((p) => h('div', { class: teamOf(p.role) === 'wolf' ? 'wolf' : '' }, `${seat(p.id)} ${p.name}`, h('br'), `${ROLE_NAME[p.role]}${p.alive ? '' : ' ✝'}`, this.playstyles[p.id] ? h('span', { class: 'style' }, this.playstyles[p.id]!) : null))),
           h(
             'div',
             { class: 'actions' },

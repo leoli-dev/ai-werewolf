@@ -1,4 +1,5 @@
 import type { Persona } from '../personas';
+import type { Playstyle } from './playstyles';
 import {
   ROLE_NAME,
   EXPLODE_CHOICE,
@@ -138,7 +139,7 @@ export type { Persona } from '../personas';
  * System prompt for every call: the rulebook first (the same for all players),
  * then who you are, what you privately know, your role's strategy and how to speak.
  */
-export function systemPrompt(view: PlayerView, persona: Persona): string {
+export function systemPrompt(view: PlayerView, persona: Persona, style?: Playstyle | null): string {
   const self = view.self;
   let teammates = '';
   if (isWolf(self.role)) {
@@ -156,11 +157,21 @@ export function systemPrompt(view: PlayerView, persona: Persona): string {
 
 # 身份策略
 ${ROLE_GUIDE[self.role]}
+${style && style.roles.includes(self.role) ? `
+# 你的打法风格：${style.name}
+${style.guide}
+- 这是你这局的个人打法倾向，让你和别的${ROLE_NAME[self.role]}打得不一样；它不能违反规则，也不能压过明显的局势判断——局势需要时可以变通，但默认按这个风格来打。
+` : ''}
+# 公平判断（对每个座位都一样）
+- 场上每个人都是普通玩家，只有座位号，没有谁天生更可疑。说话风格、长短、口语化、用词随意、不按套路，和身份没有任何关系：简短直白、像新手的发言不是狼的证据，能说会道的也不是好人的证据。
+- 怀疑要有能核对的依据：身份声明冲突、查验和警徽流、投票明细（谁投了谁、谁和被查杀的人站在一起）、前后说法矛盾、违反规则的说法、刻意替某人开脱或转移话题。没有这样的依据时，可以说暂时没有明确的狼坑、你在等什么信息，不要为了交差硬找一个人来踩。
+- 不跟风：前面有人踩谁，不等于那人就是狼；自己核对依据再表态。一个人被多人集火时，想一想是不是狼在带节奏抗推好人。
+- 对任何人的身份声明（起跳预言家、报查验、报用药、亮猎人）都按同一套标准检验，不因为是谁说的就先信或先疑。
 
 # 思考与表达要求
 - 每次先按规则手册推理：当前处在流程的哪一步、你能做什么；别人的声明是否符合规则；昨晚结果、投票明细在规则下说明了什么；下一步怎么做对你的阵营最有利。推理放在心里，不要写出来。
 - 用简体中文口语，性格只影响语气，内容必须是基于场上信息和规则的推理。
-- 提到玩家时用「N号」。玩家名字里的行当（铁匠、药师、猎户、骑士、裁缝……）只是小镇里的称呼，和狼人杀身份毫无关系：药师不是女巫，猎户不是猎人。谁是什么身份，只能看 GM 公布的信息和他们自己的声明。
+- 提到玩家时用「N号」，记录里也只用座位号区分玩家。名字和行当（包括你自己的）只是小镇里的称呼，和狼人杀身份毫无关系。谁是什么身份，只能看 GM 公布的信息和他们自己的声明。
 - 发言时只输出你说出口的台词：不要写动作、神态、旁白（禁止 *…*、（…）这类描写），不要输出思考过程或标签。做选择（投票、技能）时按任务要求只输出一行 JSON。`;
 }
 
@@ -177,16 +188,23 @@ function fmtEvent(e: GameEvent, view: PlayerView): string | null {
     case 'speech': {
       // speaker on its own header line and the words fenced in 「」: with a one-line
       // "7号卡尔：…6号你承认刀了4号" small models credit the seats inside the text as the speaker
+      // seat only, no name: names say nothing about roles, and one that doesn't fit
+      // the town (the human's 「旅人」) drew the models' suspicion like an outsider
       const tag = SPEECH_TAG[e.speechKind ?? 'discussion'];
-      const name = view.players[e.speaker!]?.name;
-      return `[${d} ${tag}] 发言人：${seat(e.speaker!)}${name ? `（${name}）` : ''}\n「${e.text}」`;
+      return `[${d} ${tag}] 发言人：${seat(e.speaker!)}\n「${e.text}」`;
     }
     case 'gm':
     case 'vote':
-      return `[${d} GM] ${e.text}`;
+      return `[${d} GM] ${seatsOnly(e.text, view)}`;
     default:
       return null;
   }
+}
+
+/** GM lines name players as 「5号 艾德」: keep just the seat (see fmtEvent). */
+export function seatsOnly(text: string, view: Pick<PlayerView, 'players'>): string {
+  for (const p of view.players) if (p.name) text = text.split(`${seat(p.id)} ${p.name}`).join(seat(p.id));
+  return text;
 }
 
 /**
@@ -273,7 +291,7 @@ ${task}
 这是和队友说话，不是投票：用口语直接说出你的话，不要输出 JSON 或 {"vote"/"target"…} 之类的格式。刀人投票在沟通结束后单独进行。`;
   }
   const what = {
-    discussion: '现在轮到你白天发言。分析局势，给出你的怀疑对象和理由，也可以根据策略表明（或伪装）身份。',
+    discussion: '现在轮到你白天发言。分析局势，给出你的判断：怀疑谁、依据是什么（没有可核对的依据就直说，并说明你在等什么信息），也可以根据策略和打法风格表明（或伪装）身份。',
     summary: '你是警长，所有人都已发言，你最后一个发言：梳理大家的站边与矛盾，明确归票——点出你建议大家放逐的号码（你的票算 1.5 票）。',
     lastWords: '你出局了，这是你的遗言。可以公开身份、留下信息（如查验、用药、警徽流）或指认你认为的狼人。',
     defense: '你在放逐投票中平票了，现在是 PK 发言：为自己辩护，说服台下玩家不要投你。',
