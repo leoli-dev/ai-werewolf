@@ -163,7 +163,7 @@ describe('day speech prompt', () => {
     const day = { ...speech(6, '我站边4号'), phase: 'discussion' } as GameEvent;
     const v = view(0, 'villager', [campaign, day]);
     const election = sharedNotebook(v, { election: true });
-    expect(election).toContain('[第1天 警上发言] 发言人：4号');
+    expect(election).toContain('[第1天 警上发言 · 第1位] 发言人：4号');
     expect(election).not.toContain('我站边4号');
     const today = sharedNotebook(v, { onlyDay: 1 });
     expect(today).toContain('我站边4号');
@@ -171,6 +171,25 @@ describe('day speech prompt', () => {
     // a campaign speaker answers the others on the stage, a day speaker is pointed at both books
     expect(speechTask({ kind: 'speech', purpose: 'campaign', day: 1 }, view(8, 'villager', [campaign, day]))).toContain('【警长竞选记录】');
     expect(speechTask(req, view(8, 'villager', [campaign, day]))).toMatch(/在你之前已有 7号 发言.*警上的发言见【警长竞选记录】/);
+  });
+  it('spells out the stage order so an early claim is judged by what its speaker had heard', () => {
+    const stage = (speaker: number, text: string) => ({ ...speech(speaker, text), speechKind: 'campaign', phase: 'election' }) as GameEvent;
+    // 5号 claims seer first, 10号 counter-claims after hearing him
+    const events = [stage(4, '我是预言家，6号查杀，警徽流 2、7'), stage(9, '我是预言家，11号金水，警徽流验5号')];
+    const election = sharedNotebook(view(0, 'villager', events), { election: true });
+    expect(election).toContain('[第1天 警上发言 · 第2位] 发言人：10号');
+    const t = speechTask(req, view(8, 'villager', events));
+    expect(t).toContain('【警上发言顺序】5号 → 10号');
+    expect(t).not.toContain('这是你第一次能回应他们');
+    // the early seer's first day speech: answer the later counter-claim now
+    const seer = speechTask(req, { ...view(4, 'seer', events), known: {} } as PlayerView);
+    expect(seer).toContain('你在警上发言时还没听到 10号 的发言，这是你第一次能回应他们');
+    expect(seer).toContain('调整你的警徽流');
+    // once answered, the reminder goes
+    expect(speechTask(req, view(4, 'villager', [...events, { ...speech(4, '10号是悍跳'), phase: 'discussion' } as GameEvent]))).not.toContain('第一次能回应');
+    // the last on stage heard everyone; the stage itself gets no note
+    expect(speechTask(req, view(9, 'villager', events))).not.toContain('第一次能回应');
+    expect(speechTask({ kind: 'speech', purpose: 'campaign', day: 1 }, view(8, 'villager', events))).not.toContain('【警上发言顺序】');
   });
   it('asks to check who said a quoted line', () => {
     expect(speechTask(req, view(7, 'villager', [speech(6, '…')]))).toContain('【引用自检】');
@@ -202,6 +221,12 @@ describe('system prompt', () => {
     expect(systemPrompt(view('wolfKing'), persona)).toContain('## 狼王的枪');
     expect(systemPrompt(view('hunter'), persona)).toContain('## 用好你的枪');
     expect(systemPrompt(view('villager'), persona)).not.toContain('狼队战术');
+  });
+  it('teaches the speaking-order information gap', () => {
+    const p = systemPrompt(view('villager'), persona);
+    expect(p).toContain('## 十、发言顺序与信息差');
+    expect(p).toContain('「警徽流验对跳」不是真预言家的加分项');
+    expect(systemPrompt(view('seer'), persona)).toContain('白天发言时第一时间回应');
   });
   it('adds the dealt playstyle for the role it fits', () => {
     const hook = playstyleById('wolfHook');
