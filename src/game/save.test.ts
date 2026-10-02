@@ -6,12 +6,18 @@ import type { Agent, Decision } from './types';
 const names = Array.from({ length: 12 }, (_, i) => `P${i + 1}`);
 const transcript = (g: Game) => g.events.map((e) => `${e.day}|${e.phase}|${e.type}|${e.speaker ?? ''}|${e.text}`);
 
-/** Play `seed` with mock agents, stopping (like a save) once `stopAt` answers were given. */
+/**
+ * Play `seed` with mock agents, stopping (like a save) at the first agent call once
+ * `stopAt` answers were given. `points`: the journal lengths seen at agent calls
+ * (a round of votes is asked all at once, so lengths inside one never show up here).
+ */
 async function playUntil(seed: number, stopAt: number) {
   const mocks = names.map((_, i) => new MockAgent(seed * 31 + i));
   let saved: { journal: Decision[]; agents: MockSnapshot[] } | null = null;
   const g = new Game({ names, humanSeat: -1, seed, wolfChatRounds: 2 });
+  const points = new Set<number>();
   const stop = () => {
+    points.add(g.journal.length);
     if (g.journal.length < stopAt || saved) return;
     saved = { journal: g.journal.slice(), agents: mocks.map((m) => m.snapshot()) };
     g.abort();
@@ -26,15 +32,15 @@ async function playUntil(seed: number, stopAt: number) {
     if (!(e instanceof GameAborted)) throw e;
     return undefined;
   });
-  return { g, winner, saved: saved as { journal: Decision[]; agents: MockSnapshot[] } | null };
+  return { g, winner, points: [...points], saved: saved as { journal: Decision[]; agents: MockSnapshot[] } | null };
 }
 
 describe('save games (seed + journal replay)', () => {
   it('a resumed game continues exactly like the uninterrupted one', async () => {
     for (let seed = 1; seed <= 40; seed++) {
       const full = await playUntil(seed, Infinity);
-      const total = full.g.journal.length;
-      for (const stopAt of [0, 1, Math.floor(total / 3), Math.floor(total / 2), total - 1]) {
+      const pts = full.points;
+      for (const stopAt of [0, 1, pts[Math.floor(pts.length / 3)], pts[Math.floor(pts.length / 2)], pts[pts.length - 1]]) {
         const { saved } = await playUntil(seed, stopAt);
         expect(saved).not.toBeNull();
         const mocks = names.map((_, i) => new MockAgent(seed * 31 + i));
@@ -52,6 +58,53 @@ describe('save games (seed + journal replay)', () => {
         expect(g.journal).toEqual(full.g.journal);
       }
     }
+  });
+
+  it('a save made mid-vote keeps the answers already in and asks only the rest', async () => {
+    // everyone answers 上警 at once, at different speeds; the save lands with seats 1–5 in
+    const ask = (log: number[]) =>
+      names.map((_, id): Agent => ({
+        speak: async () => '过',
+        choose: async (r) => {
+          if (r.action !== 'runForSheriff') return r.allowSkip ? null : r.candidates[0];
+          log.push(id);
+          await new Promise((res) => setTimeout(res, id * 6));
+          return id % 3 ? null : id;
+        },
+      }));
+    const play = async (replay?: Decision[], abortMs?: number) => {
+      const log: number[] = [];
+      // these agents never exile anyone: stop once the election is over
+      const g: Game = new Game(
+        { names, humanSeat: -1, seed: 9, wolfChatRounds: 1, replay },
+        { onEvent: (e) => void (/当选警长|没有警长/.test(e.text) && g.abort()) },
+      );
+      g.setAgents(ask(log));
+      const timer = abortMs === undefined ? null : setTimeout(() => g.abort(), abortMs);
+      await g.run().catch((e) => {
+        if (!(e instanceof GameAborted)) throw e;
+      });
+      if (timer) clearTimeout(timer);
+      return { g, log };
+    };
+    const full = await play();
+    const cut = await play(undefined, 27);
+    // the journal ends with the five 上警 answers that came in, tagged with their seats' places
+    expect(cut.g.journal.slice(-5).map((d) => (d as { i?: number }).i)).toEqual([0, 1, 2, 3, 4]);
+    const resumed = await play(cut.g.journal);
+    expect(resumed.log).toEqual([5, 6, 7, 8, 9, 10, 11]);
+    expect(full.g.events.some((e) => /当选警长|没有警长/.test(e.text))).toBe(true);
+    expect(transcript(resumed.g)).toEqual(transcript(full.g));
+    expect(resumed.g.journal).toEqual(full.g.journal);
+  });
+
+  it('replays a vote journaled one by one, as saves from before parallel votes have it', async () => {
+    const full = await playUntil(11, Infinity);
+    const legacy = full.g.journal.map((d) => ('t' in d ? { t: d.t } : d));
+    const g = new Game({ names, humanSeat: -1, seed: 11, wolfChatRounds: 2, replay: legacy });
+    g.setAgents(names.map(() => ({ speak: async () => 'x', choose: async () => null })));
+    expect(await g.run()).toBe(full.winner);
+    expect(transcript(g)).toEqual(transcript(full.g));
   });
 
   it('replays without asking agents or waiting for the scene', async () => {

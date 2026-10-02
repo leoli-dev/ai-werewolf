@@ -366,12 +366,24 @@ export class Game {
 
   /** The agent's answer, or the recorded one while replaying a save. Journaled either way. */
   private async answer(id: number, req: DecisionRequest): Promise<Decision> {
-    if (this.replaying) {
-      const rec = this.replay[this.cursor++];
-      if ((req.kind === 'target') !== 't' in rec) throw new ReplayMismatch(`存档第 ${this.cursor} 步与当前规则不符`);
-      this.journal.push(rec);
-      return rec;
-    }
+    if (this.replaying) return this.replayed(req);
+    const rec = await this.decide(id, req);
+    // journal before waiting out a pause, so a save made meanwhile keeps this answer
+    this.journal.push(rec);
+    await this.gate();
+    return rec;
+  }
+
+  /** The next recorded answer of the save being replayed. */
+  private replayed(req: DecisionRequest): Decision {
+    const rec = this.replay[this.cursor++];
+    if ((req.kind === 'target') !== 't' in rec) throw new ReplayMismatch(`存档第 ${this.cursor} 步与当前规则不符`);
+    this.journal.push(rec);
+    return rec;
+  }
+
+  /** Ask the agent (live play), not journaled yet. */
+  private async decide(id: number, req: DecisionRequest): Promise<Decision> {
     this.checkRestored();
     await this.gate();
     const agent = this.agents[id];
@@ -388,9 +400,6 @@ export class Game {
       }
     }
     this.guard();
-    // journal before waiting out a pause, so a save made meanwhile keeps this answer
-    this.journal.push(rec);
-    await this.gate();
     return rec;
   }
 
@@ -399,23 +408,85 @@ export class Game {
     this.setActor(id, label, req.kind === 'speech');
     try {
       const rec = await this.answer(id, req);
-      if ('t' in rec) {
-        const choice = rec.t;
-        const { candidates, allowSkip } = req as TargetRequest;
-        if (choice === null) {
-          if (allowSkip) return null;
-          return this.rng.pick(candidates);
-        }
-        if (choice === EXPLODE_CHOICE && (req as TargetRequest).canExplode) return choice;
-        if (!candidates.includes(choice)) {
-          this.emit('system', `${seat(id)}给出非法目标 ${choice + 1}，已随机替换`, { kind: 'private', to: [id] });
-          return allowSkip ? null : this.rng.pick(candidates);
-        }
-        return choice;
-      }
+      if ('t' in rec) return this.checked(id, req as TargetRequest, rec.t);
       this.lastSpeechFallback = !!rec.fb;
       this.lastSpeechExplode = !!rec.x;
       return rec.s.trim() || '（沉默）';
+    } finally {
+      this.setActor(null);
+    }
+  }
+
+  /** A pick as the rules allow it: an illegal one is replaced (at random, or by a skip). */
+  private checked(id: number, req: TargetRequest, choice: number | null): number | null {
+    const { candidates, allowSkip } = req;
+    if (choice === null) return allowSkip ? null : this.rng.pick(candidates);
+    if (choice === EXPLODE_CHOICE && req.canExplode) return choice;
+    if (!candidates.includes(choice)) {
+      this.emit('system', `${seat(id)}给出非法目标 ${choice + 1}，已随机替换`, { kind: 'private', to: [id] });
+      return allowSkip ? null : this.rng.pick(candidates);
+    }
+    return choice;
+  }
+
+  /**
+   * Picks everyone makes at the same time (votes, 上警, 退水, the AI wolves' kill
+   * vote): nobody sees another's choice before all are in, so all are asked at
+   * once and the AI requests go out together (the RequestQueue decides how many
+   * run side by side). Each answer is journaled as it arrives with its place in
+   * the round, so a save made mid-round keeps exactly the answers given (and the
+   * agents' memory of them) and asks only the rest. The answers are then checked
+   * in the given order. `stopAtExplode`: the round ends at the first 自爆, as when
+   * these were asked one by one (later answers are dropped).
+   */
+  private async askAll(
+    asks: { id: number; action: TargetAction; candidates: number[]; canExplode?: boolean }[],
+    allowSkip: boolean,
+    prompt: string,
+    label: string,
+    stopAtExplode = false,
+  ): Promise<(number | null)[]> {
+    this.guard();
+    const reqs = asks.map(({ action, candidates, canExplode }): TargetRequest => ({
+      kind: 'target', action, day: this.state.day, candidates, allowSkip, prompt, ...(canExplode ? { canExplode } : {}),
+    }));
+    const explodes = (i: number, t: number | null) => stopAtExplode && t === EXPLODE_CHOICE && !!reqs[i].canExplode;
+    // nobody in particular is acting: the HUD shows the label for the whole table
+    this.setActor(null, label);
+    try {
+      const recs: ({ t: number | null } | undefined)[] = new Array(reqs.length);
+      let filled = 0;
+      // replay: answers tagged with their place; saves from before parallel rounds have them in order
+      let inOrder = 0;
+      let over = false;
+      while (this.replaying && filled < reqs.length && !over) {
+        const next = this.replay[this.cursor];
+        const tagged = 't' in next && next.i !== undefined;
+        const at = tagged ? next.i! : inOrder++;
+        if (at >= reqs.length || recs[at]) break;
+        const rec = this.replayed(reqs[at]) as { t: number | null };
+        recs[at] = rec;
+        filled++;
+        if (!tagged && explodes(at, rec.t)) over = true;
+      }
+      if (!over) {
+        await Promise.all(
+          reqs.map(async (req, i) => {
+            if (recs[i]) return;
+            const rec = { ...(await this.decide(asks[i].id, req)), i } as { t: number | null; i: number };
+            this.journal.push(rec);
+            recs[i] = rec;
+          }),
+        );
+        await this.gate();
+      }
+      const picks: (number | null)[] = [];
+      for (const [i, rec] of recs.entries()) {
+        if (!rec) break;
+        picks.push(this.checked(asks[i].id, reqs[i], rec.t));
+        if (explodes(i, rec.t)) break;
+      }
+      return picks;
     } finally {
       this.setActor(null);
     }
@@ -630,7 +701,8 @@ export class Game {
     // AI wolves vote first; a living human wolf sees their picks (like wolves pointing at night) and votes last
     const ai = wolves.filter((w) => !w.isHuman);
     const human = wolves.filter((w) => w.isHuman);
-    for (const w of ai) votes.set(w.id, await this.askTarget(w.id, 'wolfKill', cands, true, prompt, '狼队投票中'));
+    const aiPicks = await this.askAll(ai.map((w) => ({ id: w.id, action: 'wolfKill', candidates: cands })), true, prompt, '狼队投票中');
+    ai.forEach((w, i) => votes.set(w.id, aiPicks[i]));
     const aiVotes = ai.map((w) => `${seat(w.id)}→${name(votes.get(w.id)!)}`).join('，');
     if (human.length && ai.length) this.emit('wolfChat', `队友已投：${aiVotes}。`, channel);
     for (const w of human) {
@@ -754,10 +826,8 @@ export class Game {
       const alive = this.aliveIds();
       const up: number[] = [];
       // everyone decides at once: nobody sees the others' choice until all have made theirs
-      for (const id of alive) {
-        const r = await this.askTarget(id, 'runForSheriff', [id], true, '是否上警竞选警长？上警的玩家依次发言，警下的玩家投票；上警后可以退水，但退水的人不能投票。', '考虑是否上警');
-        if (r === id) up.push(id);
-      }
+      const runs = await this.askAll(alive.map((id) => ({ id, action: 'runForSheriff', candidates: [id] })), true, '是否上警竞选警长？上警的玩家依次发言，警下的玩家投票；上警后可以退水，但退水的人不能投票。', '大家考虑是否上警');
+      alive.forEach((id, i) => runs[i] === id && up.push(id));
       voters = alive.filter((i) => !up.includes(i));
       if (!up.length) return this.noSheriff('无人上警，本局没有警长。');
       this.gm(`上警玩家：${up.map(seat).join('、')}。警下玩家：${voters.length ? voters.map(seat).join('、') : '无'}。`);
@@ -785,8 +855,14 @@ export class Game {
     this.gm('请警上玩家决定是否退水。');
     const stay: number[] = [];
     const out: number[] = [];
-    for (const id of cands) {
-      const r = await this.askTarget(id, 'withdraw', [id], true, '是否退水（放弃竞选警长）？退水后不能再当选，也不能投警长票。', '考虑是否退水', isWolf(this.players[id].role));
+    const answers = await this.askAll(
+      cands.map((id) => ({ id, action: 'withdraw', candidates: [id], canExplode: isWolf(this.players[id].role) })),
+      true, '是否退水（放弃竞选警长）？退水后不能再当选，也不能投警长票。', '警上玩家考虑是否退水',
+      true,
+    );
+    // the answers stop at the first 自爆 (in stage order): that wolf goes, the election waits for tomorrow
+    for (const [i, r] of answers.entries()) {
+      const id = cands[i];
       if (r === EXPLODE_CHOICE) {
         await this.selfDestruct(id);
         return this.suspendElection(cands, voters);
@@ -982,15 +1058,10 @@ export class Game {
    * the sheriff's vote counts 1.5. Returns the ids with the top score (empty if everyone abstained).
    */
   private async voteRound(voters: number[], candidates: number[], action: TargetAction, prompt: string, weighted: boolean): Promise<number[]> {
-    const votes: [number, number | null][] = [];
-    for (const voter of voters) {
-      const cands = candidates.filter((c) => c !== voter);
-      if (!cands.length) {
-        votes.push([voter, null]);
-        continue;
-      }
-      votes.push([voter, await this.askTarget(voter, action, cands, true, prompt, '投票中')]);
-    }
+    const able = voters.filter((v) => candidates.some((c) => c !== v));
+    const picks = await this.askAll(able.map((id) => ({ id, action, candidates: candidates.filter((c) => c !== id) })), true, prompt, '大家投票中');
+    // someone with nobody else to vote for (the lone candidate) abstains
+    const votes: [number, number | null][] = voters.map((v) => [v, able.includes(v) ? picks[able.indexOf(v)] : null]);
     const weight = (v: number) => (weighted && v === this.state.sheriff ? 1.5 : 1);
     const tally = new Map<number, number[]>();
     for (const [v, t] of votes) if (t !== null) tally.set(t, [...(tally.get(t) ?? []), v]);

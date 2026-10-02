@@ -12,9 +12,10 @@ describe('providerFromEnv', () => {
       LLM_DECISION_REASONING: 'none',
       LLM_USE_PROXY: 'false',
       LLM_TIMEOUT_MS: '5000',
+      LLM_CONCURRENCY: '4',
       LLM_HAS_KEY: '1',
     });
-    expect(config).toEqual({ provider: 'local', baseUrl: 'http://host:9000/v1', apiKey: 'sk-x', model: 'm', reasoning: 'high', decisionReasoning: 'none', useProxy: false, timeoutMs: 5000 });
+    expect(config).toEqual({ provider: 'local', baseUrl: 'http://host:9000/v1', apiKey: 'sk-x', model: 'm', reasoning: 'high', decisionReasoning: 'none', useProxy: false, timeoutMs: 5000, concurrency: 4 });
     expect(missing).toEqual([]);
     expect(keyOnServer).toBe(true);
     expect(providerFromEnv({ LLM_MODELS: ' m, n ,,m' }).models).toEqual(['m', 'n']);
@@ -36,6 +37,7 @@ describe('providerFromEnv', () => {
     expect(config.decisionReasoning).toBe('low');
     expect(config.useProxy).toBe(true);
     expect(config.timeoutMs).toBe(180_000);
+    expect(config.concurrency).toBe(1); // one request at a time unless .env says otherwise
   });
 
   it('the committed .env.example is complete', () => {

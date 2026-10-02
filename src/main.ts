@@ -3,7 +3,7 @@ import { LLMAgent } from './ai/llmAgent';
 import { MockAgent } from './ai/mockAgent';
 import { PERSONAS, TRAVELLER_LOOK } from './personas';
 import { dealPlaystyles } from './ai/playstyles';
-import { OpenAICompatibleProvider, SerialQueue } from './ai/provider';
+import { OpenAICompatibleProvider, RequestQueue, concurrencyOf } from './ai/provider';
 import { Game, GameAborted, ReplayMismatch } from './game/game';
 import { Rng } from './game/rng';
 import type { Agent } from './game/types';
@@ -125,7 +125,7 @@ async function play(settings: Settings, save?: SaveGame) {
   });
 
   const provider = new OpenAICompatibleProvider(settings.provider, (id) => vault.getKey(id));
-  const queue = new SerialQueue();
+  const queue = new RequestQueue(() => concurrencyOf(provider.config));
   ui.setEngineMode(settings.mode);
   const agents: (Agent & Partial<Snapshotting>)[] = names.map((_, i) => {
     if (i === humanSeat) return ui!.agent;

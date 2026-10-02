@@ -15,6 +15,8 @@ export interface ProviderConfig {
   /** Route through the Vite dev server (`/__llm`) to avoid CORS on local servers. */
   useProxy: boolean;
   timeoutMs: number;
+  /** Requests in flight at once (votes go out together); 1 = strictly one at a time. Default 1. */
+  concurrency?: number;
 }
 
 export interface ChatMessage {
@@ -169,14 +171,40 @@ export function stripThinking(s: string): string {
   return s.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^[\s\S]*<\/think>/, '').trim();
 }
 
-/** Single-lane FIFO so all AI calls run strictly one at a time (brief: queueing 串行). */
-export class SerialQueue {
-  private tail: Promise<unknown> = Promise.resolve();
-  pending = 0;
-  run<T>(fn: () => Promise<T>): Promise<T> {
-    this.pending++;
-    const p = this.tail.then(fn, fn);
-    this.tail = p.catch(() => {}).finally(() => this.pending--);
-    return p;
+/**
+ * FIFO for all AI calls with a cap on how many are in flight. Speeches still come
+ * one at a time (each speaker waits for the one before); simultaneous decisions
+ * (votes, 上警, 退水) are asked together and run side by side up to the cap: a
+ * cloud API takes them all at once, a local server one by one. `limit` is read
+ * per call, so a provider switched mid-game applies at once.
+ */
+export class RequestQueue {
+  private active = 0;
+  private waiting: (() => void)[] = [];
+  constructor(private limit: () => number = () => 1) {}
+
+  get pending() {
+    return this.active + this.waiting.length;
   }
+
+  private get cap() {
+    return Math.max(1, Math.floor(this.limit()) || 1);
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active < this.cap) this.active++;
+    else await new Promise<void>((r) => this.waiting.push(r)); // the slot is handed over, already counted
+    try {
+      return await fn();
+    } finally {
+      // pass the slot on, unless the cap has since been lowered
+      if (this.waiting.length && this.active <= this.cap) this.waiting.shift()!();
+      else this.active--;
+    }
+  }
+}
+
+/** Requests in flight for a provider config. */
+export function concurrencyOf(config: Pick<ProviderConfig, 'concurrency'>): number {
+  return config.concurrency ?? 1;
 }

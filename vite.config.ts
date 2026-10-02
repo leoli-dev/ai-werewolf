@@ -58,6 +58,7 @@ export default defineConfig(({ mode }) => {
     LLM_DECISION_REASONING: env.LLM_DECISION_REASONING ?? '',
     LLM_USE_PROXY: env.LLM_USE_PROXY ?? '',
     LLM_TIMEOUT_MS: env.LLM_TIMEOUT_MS ?? '',
+    LLM_CONCURRENCY: env.LLM_CONCURRENCY ?? '',
     LLM_HAS_KEY: env.LLM_API_KEY ? '1' : '',
   };
   return {

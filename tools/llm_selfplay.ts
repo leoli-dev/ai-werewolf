@@ -9,7 +9,7 @@ import { PERSONAS } from '../src/personas';
 import { dealPlaystyles } from '../src/ai/playstyles';
 import { Rng } from '../src/game/rng';
 import { existsSync } from 'node:fs';
-import { OpenAICompatibleProvider, SerialQueue } from '../src/ai/provider';
+import { OpenAICompatibleProvider, RequestQueue, concurrencyOf } from '../src/ai/provider';
 import { envProvider } from '../src/config';
 import { Game, GameAborted } from '../src/game/game';
 import { ROLE_NAME, seat } from '../src/game/types';
@@ -24,7 +24,7 @@ if (env.missing.length) throw new Error(`.env 缺少 ${env.missing.join(', ')}`)
 // node talks to the server directly (no browser CORS), with the key from .env
 const provider = new OpenAICompatibleProvider({ ...env.config, useProxy: false });
 console.log(`# ${env.config.model} @ ${env.config.baseUrl} (reasoning ${env.config.reasoning} / decisions ${env.config.decisionReasoning})`);
-const queue = new SerialQueue();
+const queue = new RequestQueue(() => concurrencyOf(provider.config));
 const stats: Record<string, number[]> = {};
 let failures = 0;
 

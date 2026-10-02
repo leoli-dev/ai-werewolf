@@ -180,7 +180,12 @@ export type SpeechResult = string | { text: string; fallback?: boolean; explode?
  * One answer an agent gave, in the order the GM asked. A save game is the deal
  * seed plus this journal: replaying it reproduces the game exactly.
  */
-export type Decision = { t: number | null } | { s: string; fb?: true; x?: true };
+/**
+ * One journaled answer: a pick (`t`) or a speech (`s`). In a round of picks made
+ * at the same time (votes, 上警, 退水) answers are journaled as they come in,
+ * tagged with their place in the round (`i`).
+ */
+export type Decision = { t: number | null; i?: number } | { s: string; fb?: true; x?: true };
 
 export interface Agent {
   speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<SpeechResult>;

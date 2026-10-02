@@ -4,7 +4,7 @@ import { ROLE_NAME, type Role } from '../game/types';
 import { PERSONAS } from '../personas';
 import { LLMAgent } from './llmAgent';
 import type { ChatMessage, OpenAICompatibleProvider } from './provider';
-import { SerialQueue } from './provider';
+import { RequestQueue } from './provider';
 import { RULEBOOK } from './prompts';
 
 /** A provider that records every request and answers something parseable. */
@@ -34,7 +34,7 @@ describe('rulebook in every model call', () => {
     const g = new Game({ names: PERSONAS.map((p) => p.name), humanSeat: -1, seed: 2, wolfChatRounds: 1 });
     // one night and the first day's election, speeches and vote
     const provider = fakeProvider(log, () => g.state.day > 1 && g.abort());
-    const queue = new SerialQueue();
+    const queue = new RequestQueue();
     g.setAgents(PERSONAS.map((p, i) => new LLMAgent(i, p, provider, queue)));
     await g.run().catch(() => {});
     const kinds = new Set<string>();

@@ -754,8 +754,17 @@ export class GameUI {
   }
 
   /** The model failed for an AI player: pause and let the human decide. */
+  /** The open 「AI 调用失败」 dialog: requests failing alongside it (votes run in parallel) share its answer. */
+  private failure: { answer: Promise<'retry' | 'fallback'>; more: HTMLElement; count: number } | null = null;
+
   askFailure(info: { player: number; kind: string; error: string }): Promise<'retry' | 'fallback'> {
-    return new Promise((resolve) => {
+    if (this.failure) {
+      const f = this.failure;
+      f.more.textContent = `同时还有 ${++f.count} 个请求也失败了，你的选择对它们一起生效。`;
+      return f.answer;
+    }
+    const more = h('p', { class: 'sub' });
+    const answer = new Promise<'retry' | 'fallback'>((resolve) => {
       const p = this.game.players[info.player];
       const KIND: Record<string, string> = {
         discussion: '发言', summary: '警长归票', lastWords: '遗言', defense: 'PK发言', vote: '投票', revote: 'PK再投',
@@ -768,9 +777,10 @@ export class GameUI {
       const done = (v: 'retry' | 'fallback') => {
         back.remove();
         if (v === 'fallback') {
-          this.engineStats.fallback++;
+          this.engineStats.fallback += 1 + (this.failure?.count ?? 0);
           this.renderEngine();
         }
+        this.failure = null;
         resolve(v);
       };
       const back = h(
@@ -783,6 +793,7 @@ export class GameUI {
           h('p', {}, `${who}的请求没有拿到可用结果（已自动重试）。`),
           h('p', { class: 'sub' }, info.error),
           h('p', { class: 'sub' }, '可能原因：模型服务不可达、显存不足（HTTP 507）、另一个程序正在占用本地模型导致排队超时。'),
+          more,
           h(
             'div',
             { class: 'actions' },
@@ -793,6 +804,8 @@ export class GameUI {
       );
       this.root.appendChild(back);
     });
+    this.failure = { answer, more, count: 0 };
+    return answer;
   }
 
   private destroyed = false;
@@ -998,7 +1011,7 @@ export class GameUI {
     // e.g. whether the witch was asked to save someone). Your own action is shown.
     const actorKey = secret && !mine
       ? (s.nightStep ? `step:${s.day}:${s.nightStep}` : '')
-      : s.actor !== null ? `${s.actor}:${s.actorLabel}` : '';
+      : s.actor !== null ? `${s.actor}:${s.actorLabel}` : s.actorLabel ? `all:${s.actorLabel}` : '';
     if (actorKey !== this.actorKey) {
       this.actorKey = actorKey;
       clearInterval(this.actorTimer);
@@ -1007,7 +1020,7 @@ export class GameUI {
         this.actorSince = this.elapsedMs;
         const timer = h('span', { class: 'timer' });
         actorEl.replaceChildren(
-          secret && !mine ? '夜幕下' : `${seat(s.actor!)} ${this.game.players[s.actor!].name} · ${s.actorLabel}`,
+          secret && !mine ? '夜幕下' : s.actor === null ? s.actorLabel : `${seat(s.actor)} ${this.game.players[s.actor].name} · ${s.actorLabel}`,
           h('span', { class: 'dots' }),
           mine ? '' : timer,
         );

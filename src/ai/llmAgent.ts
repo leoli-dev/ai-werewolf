@@ -10,7 +10,7 @@ import { MockAgent, type MockSnapshot } from './mockAgent';
 import type { Playstyle } from './playstyles';
 import { REVIEW_TASK, awardVoteTask, parseAwardVote, reviewSystemPrompt, reviewUserPrompt } from './review';
 import { cleanSpeech, parseExplode, parseTarget, privateNotebook, sharedNotebook, speechTask, systemPrompt, targetTask, type Persona } from './prompts';
-import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type SerialQueue } from './provider';
+import { ProviderError, type ChatMessage, type OpenAICompatibleProvider, type RequestQueue } from './provider';
 
 export interface AgentTelemetry {
   onCall?(info: { player: number; kind: string; ms: number; ok: boolean; error?: string }): void;
@@ -33,7 +33,7 @@ export interface LLMSnapshot {
 /**
  * An AI NPC driven by an OpenAI-compatible model. Memory =
  * role/system prompt + 共享发言记录本 (public events) + 角色私本 (private
- * events + its own notes). All calls go through one SerialQueue.
+ * events + its own notes). All calls go through one RequestQueue.
  */
 export class LLMAgent implements Agent, Reviewer {
   /** Private notes: the reasons behind its own night actions / votes. */
@@ -44,7 +44,7 @@ export class LLMAgent implements Agent, Reviewer {
     private id: number,
     readonly persona: Persona,
     private provider: OpenAICompatibleProvider,
-    private queue: SerialQueue,
+    private queue: RequestQueue,
     private telemetry: AgentTelemetry = {},
     /** 打法风格 dealt for this game (悍跳狼, 装神民…); the rule AI fallback plays it too. */
     readonly style: Playstyle | null = null,
