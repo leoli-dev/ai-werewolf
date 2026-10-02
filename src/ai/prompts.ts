@@ -69,13 +69,13 @@ export const RULEBOOK = `# 狼人杀规则手册（12 人狼王守卫 · 标准�
 2. 警长竞选（只在第一天；若被自爆打断，第二天在公布死讯前从退水环节继续）：
    - 此时昨晚的死讯还没公布，昨晚死的人自己也不知道，照常参加竞选。
    - 所有人同时决定是否上警。上警的叫警上玩家，其余是警下玩家。
-   - 警上玩家从随机一人开始，按顺时针（号码从小到大，12号接1号）或逆时针依次发言。
+   - 警上玩家从随机一人开始，按顺时针（号码从小到大，12号接1号）或逆时针依次发言。每人只发言一次，说完不能补充、不能插话，前面的人发言时听不到后面的人（见第十节）。
    - 发言后警上玩家可以退水（放弃竞选）；退水的人不能当选，也不能投警长票。
    - 只剩一人自动当选；无人上警、全部退水或没有警下玩家时，本局没有警长。
    - 警下玩家投票（可弃票），得票最多者当选；平票者 PK 发言后警下再投一次，再平票则警徽流失（本局没有警长）。
    - 狼人在警上自爆：竞选中断，公布死讯后直接天黑，第二天从退水继续；第二次自爆则警徽流失。
 3. 公布昨晚死讯（只有名单）。第一夜的死者有遗言；之后夜里死的人没有遗言。死者若是警长先移交警徽；若是没被毒的猎人或狼王可以开枪，被带走的人有遗言。
-4. 发言：有警长时由警长决定从谁开始——昨晚只死一人时从死者左右两侧选一边，平安夜或死两人时从警长左右两侧选一边；警长最后一个发言并「归票」（点出建议放逐的号码）。没有警长时，从死者一侧或随机一人开始。
+4. 发言（每人一次，不能插话，也不能回头补充）：有警长时由警长决定从谁开始——昨晚只死一人时从死者左右两侧选一边，平安夜或死两人时从警长左右两侧选一边；警长最后一个发言并「归票」（点出建议放逐的号码）。没有警长时，从死者一侧或随机一人开始。
 5. 放逐投票：全体存活玩家投票，可以弃票；警长的一票算 1.5 票；得票最多者出局。全员弃票则无人出局。
 6. PK：平票的人依次 PK 发言，然后只由台下玩家（不含 PK 的人）在他们之中再投一次；再平票则今天无人出局。
 7. 被放逐者：先移交警徽（如果是警长），再留遗言，是猎人或狼王可开枪。之后天黑。
@@ -114,7 +114,14 @@ export const RULEBOOK = `# 狼人杀规则手册（12 人狼王守卫 · 标准�
 - 警长死后警徽的去向、谁拿了警徽后被刀，都能帮助判断真假预言家。
 - 算屠边：数清还可能活着的神职和村民；狼人只需要其中一边清空，好人要守住两边。
 - 投票明细是公开的：谁和查杀站在一起、谁在关键时刻弃票，都是线索。
-- 出局的人不再发言和投票；昨晚的死者在第一天警长竞选时还不知道自己死了。`;
+- 出局的人不再发言和投票；昨晚的死者在第一天警长竞选时还不知道自己死了。
+
+## 十、发言顺序与信息差（警上、白天、PK 都一样）
+- 每个环节每人只说一次，按顺序轮流：前置位（先发言）的人只听过在他之前的发言，后置位的人听过前面所有人。评价任何一段发言，只能拿他发言那一刻已经听到的内容要求他。
+- 不能怪前置位的人没回应后面才出现的内容：他发言时后面的人还没开口——没回应后面的对跳、警徽流没留给后面才起跳的人、查验没碰到后面的人，都不是破绽，他根本做不到。
+- 后置位起跳有信息优势：他已经听到前面预言家报的金水、查杀和警徽流，可以照着编自己的查验——给前面的预言家发查杀、把警徽流点到前面的预言家身上、给被查杀的人发金水对冲。所以「后跳的人查验或警徽流直接针对先跳的人」不能算他更真的证据：先跳的人根本没有机会做对称的事。比较对跳要看：首验和警徽流的理由在各自的发言位置上合不合理，后跳的人是不是在利用信息差做文章。
+- 真预言家自己已经确定和他对跳的人是狼，把查验或警徽流留给对跳者对他没有新信息（悍跳的狼验真预言家也一样什么都验不出来）；「警徽流验对跳」不是真预言家的加分项。
+- 前置位的人对后面内容的回应，要看他下一次发言（第一天白天发言、PK 发言或遗言）：那时他必须回应对跳和质疑，预言家也可以在那时调整警徽流。那一次还不回应，才是破绽。`;
 
 /**
  * 狼队战术：两种狼都用。打法要多变（队友之间分工），局势不利时用自爆保队友、
@@ -133,7 +140,8 @@ const WOLF_TACTICS = `## 狼队战术
   · 中局刀查杀位：队友已经被预言家查杀、明天注定被放逐，夜里干脆刀掉他——好人会怀疑「被查杀的人怎么会被狼刀」，转而怀疑那个预言家是假的，悍跳的队友更好站住。
   · 狼王自刀：狼王被刀出局也能开枪，可以夜里刀狼王，让他天亮带走真预言家或女巫；前提是女巫的金水已经用掉（或判断她不会救）。
   · 自刀前要算清：女巫金水还在不在、守卫可能守谁，以及狼队数量够不够承受。
-- 空刀也是选项：怀疑守卫守中、或想制造平安夜混淆视听时可以用，但一般不如刀人。`;
+- 空刀也是选项：怀疑守卫守中、或想制造平安夜混淆视听时可以用，但一般不如刀人。
+- 悍跳看位置：在真预言家后面跳能抓住信息差（照着他的查验和警徽流编你的），但好人也知道后置位悍跳的套路，查验和警徽流要编得在你的位置上说得通，不要只盯着对跳的人；先于真预言家跳就要做好在白天发言里回应他的准备。`;
 
 const ROLE_GUIDE: Record<Role, string> = {
   werewolf:
@@ -151,7 +159,7 @@ ${WOLF_TACTICS}`,
   villager:
     '你是村民，没有技能。认真分析每个人的发言逻辑、投票行为和前后矛盾之处，对照规则找出说谎的人。可以上警争夺警徽帮好人归票，也可以在警下投票给你认为是真预言家的人。不要冒充神职挡刀以外的用途，也不要轻易暴露谁是神。',
   seer:
-    '你是预言家。第一天一般要上警起跳：报出昨晚的查验（金水或查杀），并留警徽流（今晚验谁、明晚验谁）；当上警长后如果夜里死亡，按警徽流把警徽交给查验出的好人（查到狼则撕警徽或交给金水），让信息传下去。优先查验发言可疑或对跳你的人。提防狼人悍跳冒充你，用查验结果和规则拆穿他。',
+    '你是预言家。第一天一般要上警起跳：报出昨晚的查验（金水或查杀），并留警徽流（今晚验谁、明晚验谁）；当上警长后如果夜里死亡，按警徽流把警徽交给查验出的好人（查到狼则撕警徽或交给金水），让信息传下去。查验优先给发言可疑、能带来新信息的人；和你对跳的人你已经确定是狼，不必浪费查验和警徽流在他身上。提防狼人悍跳冒充你，用查验结果和规则拆穿他。注意发言顺序（规则手册第十节）：你在警上先发言、之后才有人对跳时，你这轮回应不了，白天发言时第一时间回应——指出他是听了你的查验和警徽流才编的，必要时调整警徽流；你后发言、前面已有人跳预言家时，你知道他是狼，直接点出来并拆他的查验。',
   witch:
     '你是女巫。金水在时你知道刀口：第一夜可以自救，之后不能；同一晚只能用一瓶药。救人要考虑被刀的人是否像神职、狼人是否可能自刀骗药；毒人要有把握（优先毒被查杀的人或行为明显的狼）。白天一般不急于暴露身份，必要时可以公开用药信息（如报出银水、毒了谁）来证明自己或指认狼人。',
   hunter:
@@ -214,7 +222,7 @@ const SPEECH_TAG: Record<SpeechKind, string> = {
 /** 警长竞选 has its own shared record (it may run over two days). */
 export const isElection = (e: GameEvent) => e.phase === 'election';
 
-function fmtEvent(e: GameEvent, view: PlayerView): string | null {
+function fmtEvent(e: GameEvent, view: PlayerView, place?: number): string | null {
   const d = `第${e.day}天`;
   switch (e.type) {
     case 'speech': {
@@ -222,7 +230,7 @@ function fmtEvent(e: GameEvent, view: PlayerView): string | null {
       // "7号卡尔：…6号你承认刀了4号" small models credit the seats inside the text as the speaker
       // seat only, no name: names say nothing about roles, and one that doesn't fit
       // the town (the human's 「旅人」) drew the models' suspicion like an outsider
-      const tag = SPEECH_TAG[e.speechKind ?? 'discussion'];
+      const tag = SPEECH_TAG[e.speechKind ?? 'discussion'] + (place ? ` · 第${place}位` : '');
       return `[${d} ${tag}] 发言人：${seat(e.speaker!)}\n「${e.text}」`;
     }
     case 'gm':
@@ -245,11 +253,13 @@ export function seatsOnly(text: string, view: Pick<PlayerView, 'players'>): stri
  */
 export function sharedNotebook(view: PlayerView, opts: { before?: number; onlyDay?: number; maxChars?: number; election?: boolean } = {}): string {
   const maxChars = opts.maxChars ?? 20000;
+  // stage speeches carry their place in the order: who could have heard whom
+  const stage = campaignOrder(view);
   const lines = view.events
     .filter((e) => e.visibility.kind === 'public')
     .filter((e) => isElection(e) === !!opts.election)
     .filter((e) => (opts.before === undefined || e.day < opts.before) && (opts.onlyDay === undefined || e.day === opts.onlyDay))
-    .map((e) => fmtEvent(e, view))
+    .map((e) => fmtEvent(e, view, e.type === 'speech' && e.speechKind === 'campaign' ? stage.indexOf(e.speaker!) + 1 : undefined))
     .filter((x): x is string => !!x);
   let text = lines.join('\n');
   if (text.length > maxChars) text = '…（更早的记录已省略）\n' + text.slice(-maxChars);
@@ -262,6 +272,38 @@ export function todaysSpeakers(view: PlayerView, election = false): number[] {
     .filter((e) => e.type === 'speech' && e.day === view.day && e.speaker !== undefined && e.speaker !== view.self.id && isElection(e) === election)
     .map((e) => e.speaker!);
   return [...new Set(ids)];
+}
+
+/** Who spoke on the sheriff stage, in speaking order (the campaign runs once, on one day). */
+export function campaignOrder(view: Pick<PlayerView, 'events'>): number[] {
+  const ids = view.events.filter((e) => e.type === 'speech' && e.speechKind === 'campaign' && e.speaker !== undefined).map((e) => e.speaker!);
+  return [...new Set(ids)];
+}
+
+/**
+ * After the stage: the campaign order spelled out, so a day speech judges each
+ * stage speech by what that speaker had heard — an early seer can't have
+ * answered a counter-claim made after him. A stage speaker who hasn't spoken
+ * since is told this is their first chance to answer the ones who came later.
+ */
+export function stageOrderNote(view: PlayerView): string {
+  const order = campaignOrder(view);
+  if (order.length < 2) return '';
+  const lines = [
+    `【警上发言顺序】${order.map(seat).join(' → ')}。警上每人只说一次：每个人发言时只听过排在他前面的人，评价警上发言只能拿他当时听到的内容要求他；后面的人能照着前面的说法做文章（见规则手册第十节）。`,
+  ];
+  const me = view.self.id;
+  const later = order.slice(order.indexOf(me) + 1);
+  if (order.includes(me) && later.length) {
+    const said = view.events.findIndex((e) => e.type === 'speech' && e.speechKind === 'campaign' && e.speaker === me);
+    const since = view.events.slice(said + 1).some((e) => e.type === 'speech' && e.speaker === me && !isElection(e));
+    if (!since) {
+      lines.push(
+        `你在警上发言时还没听到 ${later.map(seat).join('、')} 的发言，这是你第一次能回应他们：有人和你对跳、给你发查杀、报了和你冲突的查验或质疑你时，这次要正面回应${view.self.role === 'seer' ? '，需要的话调整你的警徽流' : ''}。`,
+      );
+    }
+  }
+  return lines.join('\n');
 }
 
 /** Tonight's wolf-chat lines from teammates after this wolf last spoke, passes left out. */
@@ -346,11 +388,12 @@ ${task}
       ? '\n【保密】狼队频道的内容（刀了谁、狼队讨论过什么、谁是你的队友）只有狼人知道，白天绝不能说出口，也不能说漏嘴。昨夜的公开结果只有 GM 宣布的死亡名单。'
       : '\n【保密】私人记录本里的信息别人不知道；除非你有意公开身份（如报查验、报用药），不要把它当成大家都知道的事来说。';
   const progress = speechProgress(req, view);
+  const stageNote = onStage ? '' : stageOrderNote(view);
   const explode = req.canExplode
     ? `\n【自爆选项】你是狼人，可以选择自爆：在发言最开头写「${EXPLODE_TAG}」，后面接你的最后一句话。自爆后你立刻出局，今天剩下的发言和放逐投票全部取消，直接天黑，狼队夜里照常再刀一人（在警上自爆会让警长竞选推迟到明天）。先对照身份策略里的「狼队战术」判断：今天的放逐票是不是要出掉一个狼队友、你是不是已经被可信查杀必死、真预言家是不是快拿到警徽、自爆后再刀一人能不能屠边——值得就果断自爆，用你一只狼保住队友、抢一个夜晚；局势正常、没人怀疑你时不要自爆。${view.self.role === 'wolfKing' && !view.wolfKing?.hasShot ? '你是狼王、枪还在：自爆会浪费枪，一般宁可被放逐后开枪。' : ''}`
     : '';
   return `现在是第 ${req.day} 天（第 ${req.day} 轮白天）。${aliveList(view)}
-${progress ? `${progress}\n` : ''}${what}
+${progress ? `${progress}\n` : ''}${stageNote ? `${stageNote}\n` : ''}${what}
 ${respond}${req.purpose === 'lastWords' ? '' : secret}${explode}
 200 字以内，直接输出发言内容。`;
 }
@@ -409,7 +452,7 @@ ${summary}${tip ? `\n${tip}` : ''}`;
   }
   if (req.purpose === 'campaign') {
     const left = order.slice(order.indexOf(me) + 1).length;
-    return `【警上发言进度】上警玩家：${order.map(seat).join('、')}。${line}\n${left ? `你之后还有 ${left} 位警上玩家发言。` : '你是最后一位警上发言的人。'}全部说完后警上玩家可以退水，然后由警下玩家投票选警长。`;
+    return `【警上发言进度】上警玩家：${order.map(seat).join('、')}。${line}\n${left ? `你之后还有 ${left} 位警上玩家发言：警上每人只说一次，他们说什么你这轮都回应不了，要等白天发言时再回应。` : '你是最后一位警上发言的人。'}全部说完后警上玩家可以退水，然后由警下玩家投票选警长。`;
   }
   if (req.purpose === 'defense' || req.purpose === 'campaignPk') {
     const left = total - done - 1;
