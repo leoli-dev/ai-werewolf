@@ -1,4 +1,4 @@
-import { PROVIDERS, PROVIDER_IDS, clampEffort, effortsFor, providerAvailable, type ProviderId } from './ai/catalog';
+import { CLOUD_CONCURRENCY, PROVIDERS, PROVIDER_IDS, clampEffort, effortsFor, providerAvailable, type ProviderId } from './ai/catalog';
 import type { ProviderConfig } from './ai/provider';
 import { envProvider } from './config';
 import type { Role } from './game/types';
@@ -167,7 +167,9 @@ export function updateProfile(id: ProviderId, patch: Partial<LlmProfile>) {
 
 /** The request settings of the active (or given) provider. */
 export function resolveProvider(c: Config = current, id: ProviderId = c.llm.active): ProviderConfig {
-  return { provider: id, ...c.llm.profiles[id], timeoutMs: envProvider().config.timeoutMs };
+  const env = envProvider().config;
+  const concurrency = PROVIDERS[id].fromEnv ? env.concurrency : CLOUD_CONCURRENCY;
+  return { provider: id, ...c.llm.profiles[id], timeoutMs: env.timeoutMs, concurrency };
 }
 
 /** Returns an unsubscribe function. */

@@ -6,8 +6,10 @@
  */
 import { LLMAgent } from '../src/ai/llmAgent';
 import { PERSONAS } from '../src/personas';
+import { dealPlaystyles } from '../src/ai/playstyles';
+import { Rng } from '../src/game/rng';
 import { existsSync } from 'node:fs';
-import { OpenAICompatibleProvider, SerialQueue } from '../src/ai/provider';
+import { OpenAICompatibleProvider, RequestQueue, concurrencyOf } from '../src/ai/provider';
 import { envProvider } from '../src/config';
 import { Game, GameAborted } from '../src/game/game';
 import { ROLE_NAME, seat } from '../src/game/types';
@@ -22,7 +24,7 @@ if (env.missing.length) throw new Error(`.env 缺少 ${env.missing.join(', ')}`)
 // node talks to the server directly (no browser CORS), with the key from .env
 const provider = new OpenAICompatibleProvider({ ...env.config, useProxy: false });
 console.log(`# ${env.config.model} @ ${env.config.baseUrl} (reasoning ${env.config.reasoning} / decisions ${env.config.decisionReasoning})`);
-const queue = new SerialQueue();
+const queue = new RequestQueue(() => concurrencyOf(provider.config));
 const stats: Record<string, number[]> = {};
 let failures = 0;
 
@@ -38,6 +40,9 @@ const game = new Game(
     },
   },
 );
+const styleRng = new Rng(seed);
+const styles = dealPlaystyles(game.players.map((p) => p.role), () => styleRng.next());
+console.log(`# 打法：${styles.map((s, i) => `${seat(i)}${ROLE_NAME[game.players[i].role]}·${s?.name}`).join(' ')}`);
 game.setAgents(
   PERSONAS.map((p, i) =>
     new LLMAgent(i, p, provider, queue, {
@@ -47,7 +52,7 @@ game.setAgents(
           console.log(`   !! call failed ${seat(c.player)} ${c.kind}: ${c.error}`);
         } else (stats[c.kind] ??= []).push(c.ms);
       },
-    }),
+    }, styles[i]),
   ),
 );
 const t0 = Date.now();

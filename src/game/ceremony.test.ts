@@ -3,7 +3,7 @@ import { MockAgent } from '../ai/mockAgent';
 import { LLMAgent } from '../ai/llmAgent';
 import { godTranscript, parseAwardVote } from '../ai/review';
 import type { ChatMessage, OpenAICompatibleProvider } from '../ai/provider';
-import { SerialQueue } from '../ai/provider';
+import { RequestQueue } from '../ai/provider';
 import { PERSONAS } from '../personas';
 import { tallyAwards, validVote, type ReviewContext } from './ceremony';
 import { Game } from './game';
@@ -96,7 +96,7 @@ describe('颁奖典礼 god view', () => {
         return { content: json ? '{"best": 2, "worst": 3, "reason": "测试"}' : '2号打得最好，3号最差。', ms: 1 };
       },
     } as unknown as OpenAICompatibleProvider;
-    const a = new LLMAgent(0, PERSONAS[0], provider, new SerialQueue());
+    const a = new LLMAgent(0, PERSONAS[0], provider, new RequestQueue());
     const ctx = { ...context(g, 0), reviews: [{ speaker: 11, text: '我先说两句' }] };
     expect(await a.review(ctx)).toBe('2号打得最好，3号最差。');
     expect(await a.awardVote(ctx)).toMatchObject({ best: 1, worst: 2 });

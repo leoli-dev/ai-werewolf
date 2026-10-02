@@ -20,6 +20,8 @@ export interface LlmEnv {
   LLM_DECISION_REASONING?: string;
   LLM_USE_PROXY?: string;
   LLM_TIMEOUT_MS?: string;
+  /** Requests the local server gets at once (votes are asked together); default 1. */
+  LLM_CONCURRENCY?: string;
   /** Browser only: '1' when the dev server holds an API key for the proxy. */
   LLM_HAS_KEY?: string;
 }
@@ -49,6 +51,7 @@ export function providerFromEnv(env: LlmEnv): EnvProvider {
   const models = parseModels(env.LLM_MODELS?.trim() ? env.LLM_MODELS : env.LLM_MODEL);
   const missing = [...(env.LLM_BASE_URL?.trim() ? [] : ['LLM_BASE_URL']), ...(models.length ? [] : ['LLM_MODELS'])];
   const timeout = Number(env.LLM_TIMEOUT_MS);
+  const lanes = Math.floor(Number(env.LLM_CONCURRENCY));
   return {
     // `.env` describes the local server (the official APIs are presets, see catalog.ts)
     config: {
@@ -60,6 +63,7 @@ export function providerFromEnv(env: LlmEnv): EnvProvider {
       decisionReasoning: level(env.LLM_DECISION_REASONING, 'low'),
       useProxy: !/^(0|false|no|off)$/i.test((env.LLM_USE_PROXY ?? '').trim()),
       timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 180_000,
+      concurrency: lanes >= 1 ? lanes : 1,
     },
     models,
     keyOnServer: env.LLM_HAS_KEY === '1',

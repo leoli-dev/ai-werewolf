@@ -483,20 +483,15 @@ describe('Standard flow: 警长竞选', () => {
 
   it('only 警下 players vote; a tie goes to PK and a second tie loses the badge', async () => {
     const [a, b] = [0, 1];
+    const voters: number[] = [];
     const g = scripted(4, (id, r) => {
       stopAt(1)(r);
+      if (r.action === 'sheriffVote') voters.push(id);
       if (r.action === 'wolfKill') return null;
       if (r.action === 'runForSheriff') return id === a || id === b ? id : null;
       if (r.action === 'sheriffVote' || r.action === 'sheriffRevote') return id === 2 ? a : id === 3 ? b : null;
       return undefined;
     });
-    const voters: number[] = [];
-    const inner = g as unknown as { askTarget: (id: number, action: string, ...rest: unknown[]) => Promise<unknown> };
-    const orig = inner.askTarget.bind(g);
-    inner.askTarget = (id, action, ...rest) => {
-      if (action === 'sheriffVote') voters.push(id);
-      return orig(id, action, ...rest);
-    };
     await g.run().catch(() => {});
     expect(voters.sort((x, y) => x - y)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(g.events.filter((e) => e.speechKind === 'campaignPk').map((e) => e.speaker)).toEqual([a, b]);

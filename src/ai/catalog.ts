@@ -112,6 +112,9 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
 
 export const PROVIDER_IDS: ProviderId[] = ['openai', 'deepseek', 'local'];
 
+/** Requests a cloud API gets at once: every AI's vote goes out together. (The local server: `.env` LLM_CONCURRENCY.) */
+export const CLOUD_CONCURRENCY = 12;
+
 /**
  * A local server is only reachable when the page itself is served locally:
  * from a public origin (e.g. GitHub Pages) the browser's CORS / private-network

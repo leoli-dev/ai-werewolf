@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent, PlayerView, TargetRequest } from '../game/types';
+import { playstyleById } from './playstyles';
 import { cleanSpeech, parseTarget, sharedNotebook, speechProgress, speechTask, systemPrompt } from './prompts';
 
 const req = (candidates: number[], allowSkip = true): TargetRequest => ({
@@ -148,7 +149,14 @@ describe('day speech prompt', () => {
 
   it('puts the speaker on a header line and fences the words', () => {
     const t = sharedNotebook(view(0, 'villager', [speech(6, '6号你承认刀了4号？')]), { onlyDay: 1 });
-    expect(t).toBe('[第1天 发言] 发言人：7号（P7）\n「6号你承认刀了4号？」');
+    expect(t).toBe('[第1天 发言] 发言人：7号\n「6号你承认刀了4号？」');
+  });
+  it('names players by seat only, so the human\'s name does not stand out', () => {
+    const gm = (text: string) => ({ type: 'gm', day: 1, text, visibility: { kind: 'public' } }) as GameEvent;
+    const t = sharedNotebook(view(0, 'villager', [gm('昨晚死亡的玩家：3号 P3、12号 P12。'), gm('5号 P5 被放逐。')]), { onlyDay: 1 });
+    expect(t).toContain('昨晚死亡的玩家：3号、12号。');
+    expect(t).toContain('5号 被放逐。');
+    expect(t).not.toMatch(/P\d/);
   });
   it('keeps the election in its own shared record', () => {
     const campaign = { ...speech(3, '我是预言家，警徽流 5、8'), speechKind: 'campaign', phase: 'election' } as GameEvent;
@@ -177,8 +185,28 @@ describe('day speech prompt', () => {
 });
 
 describe('system prompt', () => {
+  const persona = { name: '药师伊索', trait: '', look: {} as never };
+  const view = (role: string) => ({ self: { id: 0, role }, known: {} }) as unknown as PlayerView;
   it('says town trades in names are not game roles', () => {
-    const view = { self: { id: 0, role: 'villager' }, known: {} } as unknown as PlayerView;
-    expect(systemPrompt(view, { name: '药师伊索', trait: '', look: {} as never })).toContain('药师不是女巫');
+    expect(systemPrompt(view('villager'), persona)).toContain('名字和行当（包括你自己的）只是小镇里的称呼');
+  });
+  it('asks for evidence, not speaking style, before suspecting anyone', () => {
+    const p = systemPrompt(view('villager'), persona);
+    expect(p).toContain('# 公平判断');
+    expect(p).toContain('简短直白、像新手的发言不是狼的证据');
+  });
+  it('teaches the pack 自爆 to save a teammate, 自刀, and both guns', () => {
+    const wolf = systemPrompt(view('werewolf'), persona);
+    expect(wolf).toContain('自爆是保护队友的手段');
+    expect(wolf).toContain('自刀也是一种玩法');
+    expect(systemPrompt(view('wolfKing'), persona)).toContain('## 狼王的枪');
+    expect(systemPrompt(view('hunter'), persona)).toContain('## 用好你的枪');
+    expect(systemPrompt(view('villager'), persona)).not.toContain('狼队战术');
+  });
+  it('adds the dealt playstyle for the role it fits', () => {
+    const hook = playstyleById('wolfHook');
+    expect(systemPrompt(view('werewolf'), persona, hook)).toContain('# 你的打法风格：倒钩狼');
+    expect(systemPrompt(view('villager'), persona, hook)).not.toContain('打法风格');
+    expect(systemPrompt(view('villager'), persona)).not.toContain('打法风格');
   });
 });

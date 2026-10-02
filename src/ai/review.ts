@@ -2,6 +2,7 @@ import { validVote, type ReviewContext } from '../game/ceremony';
 import { ROLE_NAME, isWolf, seat, type DeathCause, type GameEvent, type Player, type Winner } from '../game/types';
 import type { Persona } from '../personas';
 import { RULEBOOK } from './prompts';
+import type { Playstyle } from './playstyles';
 
 const CAUSE: Record<DeathCause, string> = {
   wolf: '夜里被狼刀',
@@ -80,13 +81,13 @@ export function godTranscript(
 }
 
 /** System prompt at the ceremony: the rules, then who you were (the game is over, nothing is secret any more). */
-export function reviewSystemPrompt(ctx: ReviewContext, persona: Persona): string {
+export function reviewSystemPrompt(ctx: ReviewContext, persona: Persona, style?: Playstyle | null): string {
   const me = ctx.players[ctx.self];
   return `${RULEBOOK}
 
 # 赛后测评（颁奖典礼）
 - 游戏已经结束，所有身份都已公开，现在没有阵营、没有秘密，也不需要再伪装。
-- 你是 ${seat(me.id)}「${persona.name}」，性格：${persona.trait}。这局你的身份是：${ROLE_NAME[me.role]}（${isWolf(me.role) ? '狼人阵营' : '好人阵营'}），${me.alive ? '活到了最后' : '中途出局'}。
+- 你是 ${seat(me.id)}「${persona.name}」，性格：${persona.trait}。这局你的身份是：${ROLE_NAME[me.role]}（${isWolf(me.role) ? '狼人阵营' : '好人阵营'}），${me.alive ? '活到了最后' : '中途出局'}。${style ? `你这局给自己定的打法是「${style.name}」，复盘时可以聊聊这套打法这局成没成。` : ''}
 - GM 把整局的完整记录以上帝视角交给了每个人：所有公开发言、狼队频道、每个人的私密信息（查验、用药、守护、刀人）和投票明细。
 - 现在是测评环节：每个人轮流发表一轮赛后感言，点评谁打得好、谁打得差，之后大家投票选出全场最佳和全场最差。
 - 用简体中文口语，性格影响语气；提到玩家时用「N号」。只输出你说出口的话，不要写动作、旁白或思考过程。`;

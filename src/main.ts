@@ -2,7 +2,8 @@ import './ui/styles.css';
 import { LLMAgent } from './ai/llmAgent';
 import { MockAgent } from './ai/mockAgent';
 import { PERSONAS, TRAVELLER_LOOK } from './personas';
-import { OpenAICompatibleProvider, SerialQueue } from './ai/provider';
+import { dealPlaystyles } from './ai/playstyles';
+import { OpenAICompatibleProvider, RequestQueue, concurrencyOf } from './ai/provider';
 import { Game, GameAborted, ReplayMismatch } from './game/game';
 import { Rng } from './game/rng';
 import type { Agent } from './game/types';
@@ -106,6 +107,10 @@ async function play(settings: Settings, save?: SaveGame) {
   );
 
   if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game; // debugging hook
+  // 打法风格 per AI (悍跳狼, 倒钩狼, 装神民…), dealt for the roles at the table; its own
+  // stream off the setup seed, so a resumed game deals the same ones
+  const styleRng = new Rng(setupSeed ^ 0x9e3779b9);
+  const styles = dealPlaystyles(game.players.map((p) => (p.isHuman ? null : p.role)), () => styleRng.next());
   let leave!: () => void;
   const left = new Promise<void>((r) => (leave = r));
   stage.resetAll();
@@ -120,18 +125,19 @@ async function play(settings: Settings, save?: SaveGame) {
   });
 
   const provider = new OpenAICompatibleProvider(settings.provider, (id) => vault.getKey(id));
-  const queue = new SerialQueue();
+  const queue = new RequestQueue(() => concurrencyOf(provider.config));
   ui.setEngineMode(settings.mode);
   const agents: (Agent & Partial<Snapshotting>)[] = names.map((_, i) => {
     if (i === humanSeat) return ui!.agent;
-    if (settings.mode === 'offline') return new MockAgent(rng.int(1e9), 600);
+    if (settings.mode === 'offline') return new MockAgent(rng.int(1e9), 600, styles[i]);
     return new LLMAgent(i, personas[i], provider, queue, {
       onCall: (c) => ui?.recordCall(c.ok, c.ms),
       onFailure: (info) => ui!.askFailure(info),
-    });
+    }, styles[i]);
   });
   save?.agents.forEach((snap, i) => snap && agents[i].restore?.(snap as never));
   game.setAgents(agents);
+  ui.setPlaystyles(styles.map((s) => s?.name ?? null));
   // 颁奖典礼: every AI reviews the game (the human answers through the panel)
   ui.setReviewers(
     agents.map((a, i) => (i === humanSeat ? null : (a as Agent & Reviewer))),
