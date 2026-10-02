@@ -195,6 +195,14 @@ describe('system prompt', () => {
     expect(p).toContain('# 公平判断');
     expect(p).toContain('简短直白、像新手的发言不是狼的证据');
   });
+  it('teaches the pack 自爆 to save a teammate, 自刀, and both guns', () => {
+    const wolf = systemPrompt(view('werewolf'), persona);
+    expect(wolf).toContain('自爆是保护队友的手段');
+    expect(wolf).toContain('自刀也是一种玩法');
+    expect(systemPrompt(view('wolfKing'), persona)).toContain('## 狼王的枪');
+    expect(systemPrompt(view('hunter'), persona)).toContain('## 用好你的枪');
+    expect(systemPrompt(view('villager'), persona)).not.toContain('狼队战术');
+  });
   it('adds the dealt playstyle for the role it fits', () => {
     const hook = playstyleById('wolfHook');
     expect(systemPrompt(view('werewolf'), persona, hook)).toContain('# 你的打法风格：倒钩狼');

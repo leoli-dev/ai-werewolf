@@ -34,6 +34,8 @@ export interface MockStyle {
   hide?: boolean;
   /** Hunter: shows the gun as soon as it is suspected. */
   showGun?: boolean;
+  /** Wolf: offers itself as the night-1 kill (自刀骗药). */
+  selfKnife?: boolean;
   /** Witch: odds of saving on night 1 (default 1) and of poisoning a suspect from night 2 (default 0.5). */
   save1?: number;
   poison?: number;
@@ -65,8 +67,8 @@ export const PLAYSTYLES: Playstyle[] = [
   },
   {
     id: 'wolfBait', name: '自刀狼', roles: WOLVES, weight: 1, max: 1,
-    guide: '你爱玩骗药：第一夜在狼队频道提议自刀（刀自己），骗女巫用掉金水；白天若真被救，就以「银水」的身份博取信任，带着好人的票走。没被救也要演得像个被冤枉的好人。',
-    mock: { run: 0.3 },
+    guide: '你爱玩自刀：第一夜在狼队频道提议自刀（刀你自己），骗女巫用掉金水；白天若真被救，就以「银水」的身份博取信任，带着好人的票走。中局也会想自刀的招：队友被查杀注定要出局时提议刀掉他来抹黑预言家；狼王在、女巫金水已用时提议刀狼王让他开枪带走预言家。',
+    mock: { run: 0.3, selfKnife: true },
   },
   // ── 村民 ──
   {

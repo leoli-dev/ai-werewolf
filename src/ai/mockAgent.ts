@@ -101,27 +101,49 @@ export class MockAgent implements Agent, Reviewer {
     return best;
   }
 
-  /** A wolf called out as 查杀 (or by 3+ speakers today) sometimes self-destructs to cut the day short. */
+  /**
+   * Blow up today? A wolf called out as 查杀 (or by 3+ speakers) cuts the day short;
+   * so does one whose teammate was called 查杀 today (no exile vote, so the teammate
+   * lives and the pack kills again tonight). Never a 狼王 whose gun is still loaded.
+   */
   private cornered(v: PlayerView): boolean {
+    if (v.self.role === 'wolfKing' && !v.wolfKing?.hasShot) return false;
     const me = seat(v.self.id);
     const hits = v.events.filter(
       (e) => e.type === 'speech' && e.day === v.day && e.speaker !== v.self.id && e.text.includes(me) && /查杀|是狼/.test(e.text),
     );
-    const checked = hits.some((e) => new RegExp(`查杀\\s*${me}|${me}\\s*是狼`).test(e.text));
-    return (checked || hits.length >= 3) && this.rng.next() < 0.25;
+    const checked = hits.some((e) => new RegExp(`查杀\\s*${me}|(?<!\\d)${me}\\s*是狼`).test(e.text));
+    if ((checked || hits.length >= 3) && this.rng.next() < 0.25) return true;
+    const pack = v.players.filter((p) => p.alive && isWolf(v.known[p.id]));
+    const mateChecked = pack.some((p) => p.id !== v.self.id && checkedWolf(v, p.id, v.day));
+    return mateChecked && pack.length >= 3 && this.rng.next() < 0.2;
+  }
+
+  /** Night talk: back the first kill a teammate put forward, else propose one (自刀 included). */
+  private wolfChat(req: WolfChatRequest, v: PlayerView, others: number[]): string {
+    if (req.round > 1) return 'pass';
+    const proposed = proposedKill(v, req.day);
+    if (proposed !== null && v.players[proposed]?.alive) return `同意刀 ${seat(proposed)}。`;
+    const pack = v.players.filter((p) => p.alive && isWolf(v.known[p.id])).map((p) => p.id);
+    // 自刀骗药 on night 1 (the 自刀狼 always offers itself); later, knife a teammate already called 查杀
+    if (req.day === 1 && (this.style.selfKnife || this.rng.next() < 0.1)) return `今晚自刀 ${seat(v.self.id)}（我），骗女巫的解药，被救了我就是银水。`;
+    const doomed = pack.filter((w) => w !== v.self.id && checkedWolf(v, w));
+    if (req.day > 1 && doomed.length && this.rng.next() < 0.35) {
+      return `今晚刀 ${seat(doomed[0])}，他被查杀明天也活不了，刀了他好人会怀疑那个预言家。`;
+    }
+    const seers = others.filter((o) => !isWolf(v.known[o]) && claimsSeer(v, o));
+    const nonWolf = others.filter((o) => !isWolf(v.known[o]));
+    const pick = seers.length ? this.rng.pick(seers) : this.rng.pick(nonWolf.length ? nonWolf : others);
+    return `我建议今晚刀 ${seat(pick)}，${seers.includes(pick) ? '他跳了预言家' : '看起来像神'}。`;
   }
 
   async speak(req: SpeechRequest | WolfChatRequest, v: PlayerView): Promise<SpeechResult> {
     await this.wait();
     if (req.kind === 'speech' && req.canExplode && this.cornered(v)) {
-      return { text: '算了，不装了，我就是狼。你们好人慢慢猜吧。', explode: true };
+      return { text: '算了，不装了，我就是狼。今天这票你们投不成了，好人慢慢猜吧。', explode: true };
     }
     const others = v.players.filter((p) => p.alive && p.id !== v.self.id).map((p) => p.id);
-    if (req.kind === 'wolfChat') {
-      if (req.round > 1) return 'pass';
-      const nonWolf = others.filter((o) => !isWolf(v.known[o]));
-      return `我建议今晚刀 ${seat(this.rng.pick(nonWolf.length ? nonWolf : others))}，看起来像神。`;
-    }
+    if (req.kind === 'wolfChat') return this.wolfChat(req, v, others);
     const target = this.suspect(v, others);
     this.suspicion.set(target, (this.suspicion.get(target) ?? 0) + 1);
     const claim = this.claimLine(req, v, others);
@@ -196,6 +218,9 @@ export class MockAgent implements Agent, Reviewer {
       case 'speakOrder':
         return this.rng.pick(c);
       case 'wolfKill': {
+        // the kill the pack agreed on in the channel (自刀 included)
+        const proposed = proposedKill(v, v.day);
+        if (proposed !== null && c.includes(proposed)) return proposed;
         const nonWolf = c.filter((x) => !isWolf(v.known[x]));
         return this.rng.pick(nonWolf.length ? nonWolf : c);
       }
@@ -210,13 +235,21 @@ export class MockAgent implements Agent, Reviewer {
         const wolf = c.filter((x) => (this.suspicion.get(x) ?? 0) >= 2);
         return v.day > 1 && wolf.length && this.rng.next() < (this.style.poison ?? 0.5) ? this.rng.pick(wolf) : null;
       }
-      case 'hunterShot':
-        return this.suspect(v, c);
+      case 'hunterShot': {
+        // a 查杀 from a claimed seer first (not one the hunter knows is good), else the top suspect if there is any reason
+        const checked = c.filter((x) => checkedWolf(v, x) && v.known[x] !== 'good');
+        if (checked.length) return this.rng.pick(checked);
+        const target = this.suspect(v, c);
+        return (this.suspicion.get(target) ?? 0) > 0 || this.rng.next() < 0.5 ? target : null;
+      }
       case 'wolfKingShot': {
-        // take a good player along: a claimed seer first, else whoever is not a teammate
+        // the biggest threat to the pack: a claimed seer, the sheriff, a claimed witch, else any good player
         const nonWolf = c.filter((x) => !isWolf(v.known[x]));
         const seer = nonWolf.filter((x) => claimsSeer(v, x));
-        return seer.length ? this.rng.pick(seer) : nonWolf.length ? this.rng.pick(nonWolf) : null;
+        if (seer.length) return this.rng.pick(seer);
+        if (v.sheriff != null && nonWolf.includes(v.sheriff)) return v.sheriff;
+        const gods = nonWolf.filter((x) => claimsRole(v, x, /我是(女巫|守卫|猎人)/));
+        return gods.length ? this.rng.pick(gods) : nonWolf.length ? this.rng.pick(nonWolf) : null;
       }
       case 'vote':
       case 'revote': {
@@ -249,10 +282,25 @@ function mockReview(ctx: ReviewContext, rng: Rng): string {
   ]);
 }
 
-/** Has someone who claims seer called `id` a 查杀? */
-function checkedWolf(v: PlayerView, id: number): boolean {
+/** The first kill put forward in the pack's channel tonight (「刀 N号」, 自刀 included), if any. */
+function proposedKill(v: PlayerView, day: number): number | null {
+  for (const e of v.events) {
+    if (e.type !== 'wolfChat' || e.day !== day || e.speaker === undefined) continue;
+    const m = e.text.match(/刀\s*(\d{1,2})\s*号/);
+    if (m) return Number(m[1]) - 1;
+  }
+  return null;
+}
+
+/** Has `id` publicly claimed a role matching `re`? */
+function claimsRole(v: PlayerView, id: number, re: RegExp): boolean {
+  return v.events.some((e) => e.type === 'speech' && e.speaker === id && re.test(e.text));
+}
+
+/** Has someone who claims seer called `id` a 查杀 (on `day`, if given)? */
+function checkedWolf(v: PlayerView, id: number, day?: number): boolean {
   const s = seat(id);
-  return v.events.some((e) => e.type === 'speech' && /我是预言家/.test(e.text) && new RegExp(`查杀\\s*${s}|验了\\s*${s}，查杀|(?<!\\d)${s}\\s*是我验出来的查杀`).test(e.text));
+  return v.events.some((e) => e.type === 'speech' && (day === undefined || e.day === day) && /我是预言家/.test(e.text) && new RegExp(`查杀\\s*${s}|验了\\s*${s}，查杀|(?<!\\d)${s}\\s*是我验出来的查杀`).test(e.text));
 }
 
 /** Has `id` claimed seer in a public speech? */
