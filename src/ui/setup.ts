@@ -17,6 +17,7 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
     const wolfRounds = input(String(s.wolfChatRounds), 'number');
     wolfRounds.min = '1';
     wolfRounds.max = '5';
+    const autoPlay = h('input', { type: 'checkbox', checked: s.autoPlay }) as HTMLInputElement;
     const god = h('input', { type: 'checkbox', checked: s.godView }) as HTMLInputElement;
 
     const engine = h('span', {});
@@ -44,6 +45,7 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
         h('label', {}, '你的名字'), name,
         h('label', {}, '身份'), role,
         h('label', {}, '狼队沟通轮数'), wolfRounds,
+        h('label', {}, 'AI 代打'), h('label', { class: 'check' }, autoPlay, '由 AI 代替你全程发言和行动，自动推进，仅观看（测试用）'),
         h('label', {}, '上帝视角'), h('label', { class: 'check' }, god, '显示所有身份与夜间信息（调试用，会剧透）'),
         h('label', {}, 'AI 引擎'), h('div', { class: 'inline' }, engine, configBtn),
       ),
@@ -56,6 +58,7 @@ export function showSetup(root: HTMLElement, onRules: () => void): Promise<Setti
         role: role.value as Settings['role'],
         wolfChatRounds: Math.max(1, Math.min(5, Number(wolfRounds.value) || 3)),
         godView: god.checked,
+        autoPlay: autoPlay.checked,
       };
       saveGamePrefs(prefs);
       const { mode, paceMs } = getConfig();
