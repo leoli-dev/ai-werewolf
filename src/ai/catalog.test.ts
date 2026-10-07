@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { PROVIDERS, buildChatBody, clampEffort, effortsFor, thinkingBudget } from './catalog';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PROVIDERS, buildChatBody, clampEffort, effortsFor, lanFetchInit, servedLocally, thinkingBudget } from './catalog';
 import { keyMayGoTo } from './provider';
 
 const base = { messages: [], maxTokens: 1000, temperature: 0.9 };
@@ -61,5 +61,27 @@ describe('provider matrix', () => {
     expect(keyMayGoTo('openai', 'https://api.openai.com.evil.example/v1')).toBe(false);
     expect(keyMayGoTo('deepseek', 'https://api.openai.com/v1')).toBe(false);
     expect(keyMayGoTo('local', 'http://10.0.0.5:1234/v1')).toBe(true);
+  });
+});
+
+describe('local network', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('an https page marks plain-http LAN calls as local-network requests', () => {
+    vi.stubGlobal('location', { protocol: 'https:', hostname: 'leoli-dev.github.io' });
+    expect(servedLocally()).toBe(false);
+    expect(lanFetchInit('http://192.168.1.20:8001/v1/models')).toEqual({ targetAddressSpace: 'local' });
+    expect(lanFetchInit('http://pc.lan:1234/v1/models')).toEqual({ targetAddressSpace: 'local' });
+    // loopback is never mixed content; https needs nothing
+    expect(lanFetchInit('http://127.0.0.1:8001/v1/models')).toEqual({});
+    expect(lanFetchInit('http://localhost:8001/v1/models')).toEqual({});
+    expect(lanFetchInit('https://api.openai.com/v1/models')).toEqual({});
+    expect(lanFetchInit('/__llm/models')).toEqual({});
+  });
+
+  it('a local page needs no flag', () => {
+    vi.stubGlobal('location', { protocol: 'http:', hostname: 'localhost' });
+    expect(servedLocally()).toBe(true);
+    expect(lanFetchInit('http://192.168.1.20:8001/v1/models')).toEqual({});
   });
 });

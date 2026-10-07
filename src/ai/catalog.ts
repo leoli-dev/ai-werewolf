@@ -37,15 +37,16 @@ export interface ProviderPreset {
   dialect: Dialect;
   baseUrl: string;
   /**
-   * The local server: address and model list come from `.env` (LLM_BASE_URL /
-   * LLM_MODELS), not from this preset; the game only picks from that list.
+   * Local / LAN servers: addresses and model lists come from `.env`
+   * (LLM_BASE_URL / LLM_MODELS, LLM_BASE_URL_2 / LLM_MODELS_2, …) or are added
+   * in the 配置 panel, not from this preset; the game picks from those lists.
    */
   fromEnv: boolean;
   /** Official APIs need a key; a local server usually does not. */
   needsKey: boolean;
   /** Where to get a key. */
   keyUrl?: string;
-  /** Fixed list (official APIs); the local server's list is `.env` LLM_MODELS. */
+  /** Fixed list (official APIs); a local server's list is its own (see `fromEnv`). */
   models: ModelSpec[];
   /** Model picked when this provider is first chosen. */
   defaultModel: string;
@@ -112,22 +113,40 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
 
 export const PROVIDER_IDS: ProviderId[] = ['openai', 'deepseek', 'local'];
 
-/** Requests a cloud API gets at once: every AI's vote goes out together. (The local server: `.env` LLM_CONCURRENCY.) */
+/** Requests a cloud API gets at once: every AI's vote goes out together. (A local server: its own LLM_CONCURRENCY.) */
 export const CLOUD_CONCURRENCY = 12;
 
 /**
- * A local server is only reachable when the page itself is served locally:
- * from a public origin (e.g. GitHub Pages) the browser's CORS / private-network
- * checks reject calls to 127.0.0.1. Outside a browser (tests, scripts) it is allowed.
+ * Whether the page itself is served from this machine (`npm run dev` / preview).
+ * Only decides the default provider: a public copy (GitHub Pages) starts on
+ * OpenAI, but can still use local / LAN servers. Outside a browser: true.
  */
-export function localReachable(): boolean {
+export function servedLocally(): boolean {
   const host = (globalThis as { location?: { hostname: string } }).location?.hostname;
-  return host === undefined || host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  return host === undefined || isLoopback(host);
 }
 
-/** Providers that can be chosen from this page. */
-export function providerAvailable(id: ProviderId): boolean {
-  return id !== 'local' || localReachable();
+export function isLoopback(host: string): boolean {
+  return host === 'localhost' || host === '[::1]' || host === '::1' || /^127\./.test(host);
+}
+
+/**
+ * Extra `fetch` options for calling a plain-http LAN server from an https page
+ * (GitHub Pages): Chrome's Local Network Access exempts such requests from
+ * mixed-content blocking (after asking the user) when they are marked as going
+ * to the local network. Private IPs and `.local` names are recognised anyway;
+ * the flag also covers LAN host names such as `pc.lan`. Loopback needs nothing
+ * (it is never mixed content).
+ */
+export function lanFetchInit(url: string): { targetAddressSpace?: 'local' } {
+  const page = (globalThis as { location?: { protocol: string } }).location?.protocol;
+  if (page !== 'https:') return {};
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' && !isLoopback(u.hostname) ? { targetAddressSpace: 'local' } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** Levels offered for a local server (it may or may not honour them). */

@@ -1,5 +1,5 @@
 /** OpenAI-compatible chat completion adapter. */
-import { PROVIDERS, buildChatBody, clampEffort, effortsFor, type ProviderId } from './catalog';
+import { PROVIDERS, buildChatBody, clampEffort, effortsFor, lanFetchInit, type ProviderId } from './catalog';
 
 export interface ProviderConfig {
   /** Which entry of the provider matrix (decides the request dialect). */
@@ -44,7 +44,7 @@ export class ProviderError extends Error {
 /** Supplies the API key for a provider at request time (null = none / locked). */
 export type KeySource = (provider: ProviderId) => Promise<string | null>;
 
-/** A key only ever goes to its own provider's official address (the local server: anywhere). */
+/** A key only ever goes to its own provider's official address (local servers: any of them). */
 export function keyMayGoTo(provider: ProviderId, baseUrl: string): boolean {
   const preset = PROVIDERS[provider];
   if (preset.fromEnv) return true;
@@ -90,6 +90,7 @@ export class OpenAICompatibleProvider {
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
+        ...lanFetchInit(url),
         method: init.method,
         headers,
         body: init.body ? JSON.stringify(init.body) : undefined,
