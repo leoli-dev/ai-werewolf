@@ -1,8 +1,8 @@
-import { PROVIDERS, PROVIDER_IDS, effortsFor, providerAvailable } from '../ai/catalog';
+import { PROVIDERS, PROVIDER_IDS, effortsFor } from '../ai/catalog';
 import { OpenAICompatibleProvider, PROXY_AVAILABLE } from '../ai/provider';
 import { envProvider } from '../config';
 import { vault } from '../keyVault';
-import { getConfig, localDefaults, onConfigChange, resolveProvider, setActiveProvider, updateConfig, updateProfile } from '../settings';
+import { addServer, cleanServer, getConfig, localDefaults, localServers, onConfigChange, removeServer, resolveProvider, setActiveProvider, updateConfig, updateProfile } from '../settings';
 import { h } from './dom';
 import { promptChangePassphrase, promptSetKey, promptUnlock } from './keyDialogs';
 
@@ -78,8 +78,6 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
               role: 'radio',
               'aria-checked': String(pid === id),
               class: `btn ${pid === id ? 'on' : ''}`,
-              disabled: !providerAvailable(pid),
-              title: providerAvailable(pid) ? null : '网页版无法访问本机模型服务，请在本地运行游戏后使用',
               onclick: () => { result.textContent = ''; setActiveProvider(pid); },
             },
             PROVIDERS[pid].label,
@@ -88,20 +86,31 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         ),
       );
 
-      // address: the official one, or the local server's from .env (not editable here)
-      const envCfg = envProvider();
-      const address = preset.fromEnv
-        ? h('div', { class: 'stack' }, h('div', { class: 'fixed-url' }, p.baseUrl || '（未配置）'), hintText('来自 .env 的 LLM_BASE_URL（含端口），游戏里不能改；改 .env 后刷新页面'))
-        : h('div', { class: 'fixed-url' }, p.baseUrl, hintText(' 官方地址'));
+      // address: the official one, or a local / LAN server (from .env or added below)
+      const servers = localServers();
+      const server = servers.find((sv) => sv.baseUrl === p.baseUrl);
+      let address: HTMLElement;
+      if (!preset.fromEnv) address = h('div', { class: 'fixed-url' }, p.baseUrl, hintText(' 官方地址'));
+      else if (!servers.some((sv) => sv.models.length)) address = h('div', { class: 'stack' }, h('div', { class: 'fixed-url' }, p.baseUrl || '（未配置）'), hintText('在 .env 填 LLM_BASE_URL（含端口），或在下面「添加服务器」'));
+      else {
+        const sel = h(
+          'select',
+          { 'aria-label': '服务器' },
+          ...servers.map((sv) => h('option', { value: sv.baseUrl, selected: sv.baseUrl === p.baseUrl, disabled: !sv.models.length }, `${sv.name} · ${sv.baseUrl}${sv.source.kind === 'browser' ? '（网页添加）' : ''}`)),
+        ) as HTMLSelectElement;
+        sel.onchange = () => { result.textContent = ''; updateProfile(id, { baseUrl: sel.value }); };
+        address = h('div', { class: 'stack' }, sel, hintText('来自 .env（LLM_BASE_URL、LLM_BASE_URL_2 …，改后刷新页面），以及下面添加的内网服务器'));
+      }
 
-      // model: pick from a fixed list — the official one, or .env LLM_MODELS for the local server
+      // model: pick from a fixed list — the official one, or the chosen local server's
       let model: HTMLElement;
       if (preset.fromEnv) {
-        if (!envCfg.models.length) model = h('p', { class: 'test-result err', style: 'margin:0' }, '.env 里没有配置模型：在 LLM_MODELS 填模型 id（多个用逗号分隔），然后刷新页面');
+        if (!server?.models.length) model = h('p', { class: 'test-result err', style: 'margin:0' }, '没有可用的模型：在 .env 的 LLM_MODELS 填模型 id（多个用逗号分隔）后刷新页面，或在下面添加服务器');
         else {
-          const sel = h('select', { 'aria-label': '模型' }, ...envCfg.models.map((m, i) => h('option', { value: m, selected: m === p.model }, i === 0 ? `${m}（默认）` : m))) as HTMLSelectElement;
+          const sel = h('select', { 'aria-label': '模型' }, ...server.models.map((m, i) => h('option', { value: m, selected: m === p.model }, i === 0 ? `${m}（默认）` : m))) as HTMLSelectElement;
           sel.onchange = () => { result.textContent = ''; updateProfile(id, { model: sel.value }); };
-          model = h('div', { class: 'stack' }, sel, hintText('列表来自 .env 的 LLM_MODELS（逗号分隔，第一个为默认）；要增删模型请改 .env 后刷新页面'));
+          const where = server.source.kind === 'env' ? `列表来自 .env 的 LLM_MODELS${server.source.suffix}（逗号分隔，第一个为默认）；要增删模型请改 .env 后刷新页面` : '列表是添加这台服务器时填写或读取的；要修改请用同一地址重新添加';
+          model = h('div', { class: 'stack' }, sel, hintText(where));
         }
       } else {
         const sel = h('select', { 'aria-label': '模型' }, ...preset.models.map((m) => h('option', { value: m.id, selected: m.id === p.model }, `${m.id} — ${m.note}`))) as HTMLSelectElement;
@@ -126,7 +135,7 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         { class: 'inline key-row' },
         hint
           ? h('span', { class: 'key-saved' }, `已加密保存 ${hint}`)
-          : h('span', { class: 'sub' }, preset.needsKey ? '未设置' : envCfg.keyOnServer ? '使用 .env 的 LLM_API_KEY（开发服务器注入）' : '可选，本地服务一般不需要'),
+          : h('span', { class: 'sub' }, preset.needsKey ? '未设置' : server?.keyOnServer && server.source.kind === 'env' && p.useProxy && PROXY_AVAILABLE ? `使用 .env 的 LLM_API_KEY${server.source.suffix}（开发服务器注入）` : '可选，本地服务一般不需要'),
         h('button', { class: 'btn', type: 'button', onclick: () => void promptSetKey(root, id) }, hint ? '替换' : '设置'),
         hint ? h('button', { class: 'btn danger', type: 'button', onclick: () => confirm(`删除已保存的 ${preset.label} API Key？`) && vault.removeKey(id) }, '删除') : null,
       );
@@ -141,11 +150,8 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         h(
           'div',
           { class: 'form', style: 'margin-top:8px' },
-          h('label', {}, '服务商'),
-          providerAvailable('local')
-            ? tabs
-            : h('div', { class: 'stack' }, tabs, hintText('「本地 LLM」只能在本机运行游戏时使用：网页版来自公网域名，浏览器会以跨域（CORS / 私有网络访问）为由拦截对 127.0.0.1 的请求。clone 仓库后 npm run dev 即可用本地模型。')),
-          h('label', {}, '地址'), address,
+          h('label', {}, '服务商'), tabs,
+          h('label', {}, preset.fromEnv ? '服务器' : '地址'), address,
           h('label', {}, '模型'), model,
           h('label', {}, '发言推理'), h('div', { class: 'inline' }, effortSel('reasoning', '发言推理'), spec?.defaultEffort ? hintText(`官方默认 ${spec.defaultEffort}`) : null),
           h('label', {}, '决策推理'), h('div', { class: 'inline' }, effortSel('decisionReasoning', '决策推理'), hintText('投票 / 夜间技能 / 狼队沟通，调低可明显提速')),
@@ -163,7 +169,86 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
           opts.inGame ? hintText('对局中切换后，下一次 AI 调用就会使用新设置') : null,
         ),
         result,
+        ...(preset.fromEnv ? [serversBox()] : []),
         vaultRow(),
+      );
+    };
+
+    // ── local / LAN servers added here (the static site has no .env) ──
+    const serverMsg = h('div', { class: 'test-result', 'aria-live': 'polite' });
+    const serversBox = () => {
+      const added = getConfig().llm.servers;
+      const url = h('input', { type: 'text', placeholder: 'http://192.168.1.20:8001/v1', 'aria-label': '服务器地址', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
+      const name = h('input', { type: 'text', placeholder: '名称（可选，如 书房 PC）', 'aria-label': '服务器名称' }) as HTMLInputElement;
+      const models = h('input', { type: 'text', placeholder: '模型 id，逗号分隔；留空则向服务器读取', 'aria-label': '模型列表', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
+      const lanesIn = h('input', { type: 'number', min: '1', max: '16', value: '1', 'aria-label': '并发数', style: 'width:64px' }) as HTMLInputElement;
+      const addBtn = h('button', { class: 'btn', type: 'button' }, '添加') as HTMLButtonElement;
+      addBtn.onclick = async () => {
+        const baseUrl = url.value.trim();
+        if (!cleanServer({ baseUrl, models: ['x'] })) {
+          serverMsg.className = 'test-result err';
+          serverMsg.textContent = '地址要以 http:// 或 https:// 开头，含端口和 /v1，例如 http://192.168.1.20:8001/v1';
+          return;
+        }
+        let list = models.value.split(',');
+        if (!models.value.trim()) {
+          addBtn.disabled = true;
+          serverMsg.className = 'test-result';
+          serverMsg.textContent = '正在读取服务器的模型列表…';
+          try {
+            const probe = new OpenAICompatibleProvider({ ...resolveProvider(getConfig(), 'local'), baseUrl }, (pid) => vault.getKey(pid));
+            list = await probe.listModels();
+          } catch (e) {
+            list = [];
+            serverMsg.className = 'test-result err';
+            serverMsg.textContent = `✗ 读不到模型列表：${(e as Error).message}。请检查地址 / 跨域设置，或直接填写模型 id。`;
+          } finally {
+            addBtn.disabled = false;
+          }
+          if (!list.length) {
+            if (!serverMsg.textContent?.startsWith('✗')) serverMsg.textContent = '✗ 服务器没有列出任何模型，请直接填写模型 id。';
+            serverMsg.className = 'test-result err';
+            return;
+          }
+        }
+        const saved = addServer({ baseUrl, name: name.value, models: list, concurrency: Number(lanesIn.value) });
+        serverMsg.className = `test-result ${saved ? 'ok' : 'err'}`;
+        serverMsg.textContent = saved ? `✓ 已添加 ${saved.name}（${saved.models.length} 个模型），并切换到它` : '✗ 地址或模型列表无效';
+      };
+      return h(
+        'div',
+        { class: 'servers-box' },
+        h('h3', {}, '内网服务器'),
+        hintText('除 .env 里的服务器外，还可以在这里添加局域网里其他主机的模型服务（Ollama、LM Studio、vLLM、MTPLX……），保存在本机浏览器。'),
+        added.length
+          ? h(
+              'ul',
+              { class: 'server-list' },
+              ...added.map((sv) =>
+                h(
+                  'li',
+                  {},
+                  h('span', { class: 'fixed-url' }, `${sv.name} · ${sv.baseUrl}`),
+                  hintText(`${sv.models.join('、')} · 并发 ${sv.concurrency}`),
+                  h('button', { class: 'btn danger', type: 'button', onclick: () => confirm(`删除服务器 ${sv.name}？`) && removeServer(sv.baseUrl) }, '删除'),
+                ),
+              ),
+            )
+          : null,
+        h(
+          'div',
+          { class: 'form', style: 'margin-top:6px' },
+          h('label', {}, '地址'), url,
+          h('label', {}, '名称'), name,
+          h('label', {}, '模型'), models,
+          h('label', {}, '并发'), h('div', { class: 'inline' }, lanesIn, hintText('服务端同时处理的请求数，单卡一般为 1'), addBtn),
+        ),
+        serverMsg,
+        PROXY_AVAILABLE
+          ? null
+          : hintText(
+              `网页版由浏览器直连服务器：服务端须允许跨域（如 Ollama 设 OLLAMA_ORIGINS=*，LM Studio 打开 CORS）。${location.protocol === 'https:' ? '本页是 https，访问 http 内网地址请用 Chrome / Edge，并在「访问本地网络」的提示里点允许；Safari / Firefox 会把它当作混合内容拦截。' : ''}`,
+            ),
       );
     };
 
@@ -199,8 +284,10 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
       }
       const r = await provider.test();
       renderEngine();
-      // the model list is .env's: only point out a mismatch, never switch on our own
-      const unlisted = served.length && !served.includes(p.model) ? ` 服务端没有列出「${p.model}」（它提供：${served.join('、')}），请检查 .env 的 LLM_MODELS。` : '';
+      // the model list is .env's (or was entered here): only point out a mismatch, never switch on our own
+      const source = localServers().find((sv) => sv.baseUrl === p.baseUrl)?.source;
+      const fix = source?.kind === 'env' ? `请检查 .env 的 LLM_MODELS${source.suffix}` : '请用同一地址重新添加该服务器';
+      const unlisted = served.length && !served.includes(p.model) ? ` 服务端没有列出「${p.model}」（它提供：${served.join('、')}），${fix}。` : '';
       result.className = `test-result ${r.ok && !unlisted ? 'ok' : 'err'}`;
       result.textContent = (!r.ok ? '✗ ' : unlisted ? '⚠ ' : '✓ ') + r.message + unlisted;
       btn.disabled = false;
@@ -246,7 +333,7 @@ export function showConfig(root: HTMLElement, opts: { inGame: 'llm' | 'offline' 
         h('label', {}, 'AI 发言'), h('label', { class: 'check' }, stepSpeech, '白天逐条查看：点「下一位发言」才出现下一段'),
       ),
       h('h2', {}, 'AI 引擎'),
-      env.missing.length ? h('p', { class: 'test-result err' }, `.env 缺少 ${env.missing.join('、')}（参考 .env.example）：「本地 LLM」的地址 / 模型列表为空。`) : null,
+      env.missing.length ? h('p', { class: 'test-result err' }, `.env 缺少 ${env.missing.join('、')}（参考 .env.example）：对应「本地 LLM」服务器的地址 / 模型列表为空。`) : null,
       h(
         'div',
         { class: 'form' },

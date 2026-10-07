@@ -46,7 +46,11 @@
 
 想先看看流程，可以把引擎切到「离线规则 AI」，不需要任何 Key。
 
-> 在线版是纯静态网页，没有开发服务器代理。要连**本地模型**，本地服务需要允许跨域（例如 Ollama 设 `OLLAMA_ORIGINS=*`，LM Studio 打开 CORS），或者按下面的方法在本地运行。
+> 在线版是纯静态网页，没有开发服务器代理，也读不到你的 `.env`。要连**本机或局域网里其他主机上的模型**，在「配置 → AI 引擎 → 本地 LLM → 内网服务器」里填地址（如 `http://192.168.1.20:8001/v1`）添加即可，模型列表可以手填，留空则向服务器读取。条件是：
+> - 模型服务允许跨域（例如 Ollama 设 `OLLAMA_ORIGINS=*`，LM Studio 打开 CORS；MTPLX 不支持跨域，只能本地运行时经代理使用）；
+> - 在线版是 https，访问 `http://` 的内网地址请用 Chrome / Edge，并在「访问本地网络」的权限提示里点允许（Safari / Firefox 会当作混合内容拦截）。
+>
+> 也可以按下面的方法在本地运行，经开发服务器代理就没有这些限制。
 
 ## 本地运行
 
@@ -64,19 +68,31 @@ npm run build      # 静态产物输出到 dist/
 
 ### 本地 LLM 配置（`.env`）
 
-「本地 LLM」的**地址和模型列表只来自**项目根目录的 `.env`，游戏、开发服务器代理、`tools/llm_selfplay.ts`、`tools/mtplx_round_bench.py` 都从这里读取。
-游戏的配置面板里，地址（含端口）只显示、不能修改；模型是一个下拉列表，只能从 `LLM_MODELS` 里选，不能手动输入。要换服务器或增删模型，请改 `.env`。
+「本地 LLM」的服务器来自项目根目录的 `.env`，游戏、开发服务器代理、`tools/llm_selfplay.ts`、`tools/mtplx_round_bench.py` 都从这里读取（脚本用第一个服务器）。
+`.env` 可以**同时列多台服务器**（本机 + 局域网其他主机，各自的地址、模型、Key、并发）：不带后缀的是第一台，同样的变量加后缀（`_2`、`_3`……或 `_PC` 这样的名字）就是另一台。
+游戏的配置面板里先选服务器、再从它的模型列表里选模型；`.env` 里的地址和模型只显示、不能在游戏里改。面板里另外添加的「内网服务器」保存在浏览器里（在线版只能用这种方式）。
+
+```ini
+LLM_BASE_URL=http://127.0.0.1:8001/v1
+LLM_MODELS=mtplx-qwen38-27b-optimized-speed
+
+LLM_BASE_URL_2=http://192.168.1.20:8001/v1
+LLM_MODELS_2=qwen3-32b,qwen3-14b
+LLM_NAME_2=书房 PC
+```
+
 `.env` 不进 git；首次 `npm run dev` 时若没有 `.env` 会自动从 `.env.example` 复制一份。OpenAI / DeepSeek 的 Key 在游戏里设置，不放这里。
 
 | 变量 | 说明 |
 |---|---|
-| `LLM_BASE_URL` | OpenAI 兼容地址（含端口），默认本地 MTPLX `http://127.0.0.1:8001/v1`；游戏只用这一个地址 |
+| `LLM_BASE_URL` | OpenAI 兼容地址（含端口），默认本地 MTPLX `http://127.0.0.1:8001/v1` |
 | `LLM_MODELS` | 游戏里可选的模型 id，逗号分隔（`GET /v1/models` 列出的名字），第一个为默认，脚本也用它。例：`LLM_MODELS=qwen3-27b,qwen3-8b`。旧的单个 `LLM_MODEL=…` 仍然可用 |
-| `LLM_API_KEY` | 可选；只留在开发服务器，由代理加到请求头，不会打包进浏览器代码 |
+| `LLM_API_KEY` | 可选；只留在开发服务器，由代理加到发往这台服务器的请求头，不会打包进浏览器代码 |
+| `LLM_BASE_URL_x` / `LLM_MODELS_x` | 第二台及以后的服务器（`x` 为后缀，如 `2`、`PC`），两项都要填；`LLM_NAME_x`（选择器里显示的名字）、`LLM_API_KEY_x`、`LLM_CONCURRENCY_x` 可选。代理只把 `LLM_API_KEY_x` 发给 `LLM_BASE_URL_x` |
 | `LLM_REASONING` / `LLM_DECISION_REASONING` | 发言 / 投票·夜间技能·狼队沟通的默认推理强度：none·low·medium·high（游戏里可调） |
 | `LLM_USE_PROXY` | 浏览器经 Vite 开发服务器转发（本地服务拒绝跨域时需要；静态构建里无效） |
 | `LLM_TIMEOUT_MS` | 单次请求超时 |
-| `LLM_CONCURRENCY` | 本地服务同时处理的请求数，默认 1（一个一个来）。发言总是依次进行；上警、退水、投票这类同时做的决定会一起发出，服务端支持并发批处理时可以调大。OpenAI / DeepSeek 总是一次全发 |
+| `LLM_CONCURRENCY` | 本地服务同时处理的请求数，默认 1（一个一个来）。发言总是依次进行；上警、退水、投票这类同时做的决定会一起发出，服务端支持并发批处理时可以调大。其他服务器没填 `LLM_CONCURRENCY_x` 时也用它。OpenAI / DeepSeek 总是一次全发 |
 
 改完 `.env` 后 Vite 会自动重启，刷新页面生效。「测试连接」会对照服务端 `GET /v1/models` 的结果，所选模型不在其中时给出提示（不会自动改选）。
 
@@ -86,8 +102,7 @@ npm run build      # 静态产物输出到 dist/
 首次使用需在仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。
 构建使用相对路径（`base: './'`），fork 后仓库改名也能直接部署。
 
-网页版只能用 OpenAI / DeepSeek，「本地 LLM」选项是灰的：页面来自公网域名（如 `*.github.io`），浏览器请求 `http://127.0.0.1` 时要过跨域（CORS）和私有网络访问检查，而本地推理服务（如 MTPLX）默认拒绝非同源请求，调用必然失败。
-只有页面本身从 `localhost` / `127.0.0.1` 打开时才开放这一项，所以要用本地模型请 clone 仓库后 `npm run dev`。
+网页版默认用 OpenAI，也可以切到「本地 LLM」，在「内网服务器」里添加本机或局域网主机上的模型服务（见上文[在线版怎么玩](#在线版怎么玩)）。页面来自公网域名（如 `*.github.io`），请求由浏览器直接发出，要过跨域（CORS）和本地网络访问检查：服务端必须允许跨域；`http://` 的内网地址需要 Chrome / Edge 并允许「访问本地网络」。不支持跨域的服务（如 MTPLX）请 clone 仓库后 `npm run dev`，经开发服务器代理使用。
 
 ## 结构
 

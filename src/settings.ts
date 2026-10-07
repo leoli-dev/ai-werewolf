@@ -1,6 +1,6 @@
-import { CLOUD_CONCURRENCY, PROVIDERS, PROVIDER_IDS, clampEffort, effortsFor, providerAvailable, type ProviderId } from './ai/catalog';
+import { CLOUD_CONCURRENCY, PROVIDERS, PROVIDER_IDS, clampEffort, effortsFor, servedLocally, type ProviderId } from './ai/catalog';
 import type { ProviderConfig } from './ai/provider';
-import { envProvider } from './config';
+import { envProvider, hostOf, lanes, normalizeBaseUrl, parseModels, type LocalServer } from './config';
 import type { Role } from './game/types';
 
 /**
@@ -8,8 +8,10 @@ import type { Role } from './game/types';
  * apply at once — also to a game in progress — and are announced to listeners.
  *
  * Everything persists in the browser except API keys, which live encrypted in
- * the key vault (see keyVault.ts). The local server's address and model list
- * come from `.env` only: the panel picks a model from that list, nothing else.
+ * the key vault (see keyVault.ts). Local / LAN servers come from `.env` (one
+ * or more, see config.ts) plus any added in the panel — the only way to reach
+ * a LAN server from the static site (GitHub Pages), which has no `.env`. The
+ * panel picks a server and one of its models.
  */
 export interface AudioLevels {
   muted: boolean;
@@ -21,7 +23,7 @@ export interface AudioLevels {
 
 /** One provider's saved choices (the matrix keeps one per provider). */
 export interface LlmProfile {
-  /** Fixed: the official address, or `.env` LLM_BASE_URL for the local server. */
+  /** Fixed: the official address; for 本地 LLM, the chosen server (see `localServers`). */
   baseUrl: string;
   model: string;
   reasoning: string;
@@ -35,7 +37,15 @@ export interface Config {
   /** Day: hold each AI speech until the human asks for the next one. */
   stepSpeech: boolean;
   audio: AudioLevels;
-  llm: { active: ProviderId; profiles: Record<ProviderId, LlmProfile> };
+  llm: { active: ProviderId; profiles: Record<ProviderId, LlmProfile>; servers: CustomServer[] };
+}
+
+/** A local / LAN server added in the 配置 panel (kept in the browser, unlike `.env`). */
+export interface CustomServer {
+  name: string;
+  baseUrl: string;
+  models: string[];
+  concurrency: number;
 }
 
 /** Per-game choices made on the new-game screen. */
@@ -85,19 +95,37 @@ function defaultProfile(id: ProviderId): LlmProfile {
   return { baseUrl: preset.baseUrl, model: preset.defaultModel, ...preset.suggested, useProxy: true };
 }
 
-/** The models a provider may use: its official list, or `.env` LLM_MODELS for the local server. */
-export function modelIds(id: ProviderId): string[] {
-  return PROVIDERS[id].fromEnv ? envProvider().models : PROVIDERS[id].models.map((m) => m.id);
+/** A saved / entered server, or null when it is unusable. */
+export function cleanServer(s: Partial<CustomServer> | undefined): CustomServer | null {
+  const baseUrl = normalizeBaseUrl(s?.baseUrl);
+  if (!/^https?:\/\/[^/]/i.test(baseUrl)) return null;
+  const models = parseModels(Array.isArray(s?.models) ? s.models.join(',') : '');
+  if (!models.length) return null;
+  return { name: String(s?.name ?? '').trim() || hostOf(baseUrl), baseUrl, models, concurrency: lanes(String(s?.concurrency)) ?? 1 };
+}
+
+/** Every local / LAN server: `.env`'s first, then the ones added in the panel (an address once). */
+export function localServers(servers: CustomServer[] = current?.llm.servers ?? []): LocalServer[] {
+  const out: LocalServer[] = envProvider().servers.filter((s) => s.baseUrl);
+  for (const s of servers) if (!out.some((o) => o.baseUrl === s.baseUrl)) out.push({ ...s, source: { kind: 'browser' } });
+  return out;
 }
 
 /** A profile that only holds values its provider accepts. */
-function sane(id: ProviderId, p: Partial<LlmProfile>): LlmProfile {
+function sane(id: ProviderId, p: Partial<LlmProfile>, servers?: CustomServer[]): LlmProfile {
   const d = defaultProfile(id);
-  // a model no longer listed (e.g. removed from .env) falls back to the default
-  const model = p.model && modelIds(id).includes(p.model) ? p.model : d.model;
+  let baseUrl = d.baseUrl;
+  let model: string;
+  if (PROVIDERS[id].fromEnv) {
+    // a server or model no longer listed (e.g. removed from .env) falls back to the default
+    const usable = localServers(servers).filter((s) => s.models.length);
+    const server = usable.find((s) => s.baseUrl === p.baseUrl) ?? usable.find((s) => s.baseUrl === d.baseUrl) ?? usable[0];
+    if (server) baseUrl = server.baseUrl;
+    model = server ? (p.model && server.models.includes(p.model) ? p.model : server.models[0]) : d.model;
+  } else model = p.model && PROVIDERS[id].models.some((m) => m.id === p.model) ? p.model : d.model;
   const efforts = effortsFor(id, model);
   return {
-    baseUrl: d.baseUrl,
+    baseUrl,
     model,
     reasoning: clampEffort(p.reasoning ?? d.reasoning, efforts),
     decisionReasoning: clampEffort(p.decisionReasoning ?? d.decisionReasoning, efforts),
@@ -119,14 +147,18 @@ function loadConfig(): Config {
   } catch {
     /* ignore */
   }
+  const servers = (Array.isArray(saved.llm?.servers) ? saved.llm.servers : []).map(cleanServer).filter((x): x is CustomServer => !!x);
+  // a public copy (GitHub Pages) starts on OpenAI; local / LAN servers stay one click away
+  const active = saved.llm?.active && PROVIDER_IDS.includes(saved.llm.active) ? saved.llm.active : servedLocally() ? 'local' : 'openai';
   return {
     mode: saved.mode ?? legacy.mode ?? 'llm',
     paceMs: saved.paceMs ?? legacy.paceMs ?? 900,
     stepSpeech: saved.stepSpeech ?? true,
     audio: { ...DEFAULT_AUDIO, muted: legacyMuted, ...saved.audio },
     llm: {
-      active: PROVIDER_IDS.includes(saved.llm?.active as ProviderId) && providerAvailable(saved.llm!.active) ? saved.llm!.active : providerAvailable('local') ? 'local' : 'openai',
-      profiles: Object.fromEntries(PROVIDER_IDS.map((id) => [id, sane(id, saved.llm?.profiles?.[id] ?? {})])) as Record<ProviderId, LlmProfile>,
+      active,
+      profiles: Object.fromEntries(PROVIDER_IDS.map((id) => [id, sane(id, saved.llm?.profiles?.[id] ?? {}, servers)])) as Record<ProviderId, LlmProfile>,
+      servers,
     },
   };
 }
@@ -162,16 +194,39 @@ export function setActiveProvider(id: ProviderId) {
 
 /** Edit one provider's profile; invalid values (e.g. an effort the new model lacks) are corrected. */
 export function updateProfile(id: ProviderId, patch: Partial<LlmProfile>) {
-  const profiles = { ...current.llm.profiles, [id]: sane(id, { ...current.llm.profiles[id], ...patch }) };
+  const profiles = { ...current.llm.profiles, [id]: sane(id, { ...current.llm.profiles[id], ...patch }, current.llm.servers) };
   current = { ...current, llm: { ...current.llm, profiles } };
+  changed();
+}
+
+/**
+ * Add (or replace, same address) a local / LAN server and switch 本地 LLM to it.
+ * Returns the stored server, or null when the address or model list is unusable.
+ */
+export function addServer(s: Partial<CustomServer>): CustomServer | null {
+  const server = cleanServer(s);
+  if (!server) return null;
+  const servers = [...current.llm.servers.filter((o) => o.baseUrl !== server.baseUrl), server];
+  const local = sane('local', { ...current.llm.profiles.local, baseUrl: server.baseUrl }, servers);
+  current = { ...current, llm: { ...current.llm, servers, profiles: { ...current.llm.profiles, local } } };
+  changed();
+  return server;
+}
+
+/** Forget a server added in the panel (`.env` servers stay); 本地 LLM falls back to another one. */
+export function removeServer(baseUrl: string) {
+  const servers = current.llm.servers.filter((o) => o.baseUrl !== baseUrl);
+  const local = sane('local', current.llm.profiles.local, servers);
+  current = { ...current, llm: { ...current.llm, servers, profiles: { ...current.llm.profiles, local } } };
   changed();
 }
 
 /** The request settings of the active (or given) provider. */
 export function resolveProvider(c: Config = current, id: ProviderId = c.llm.active): ProviderConfig {
   const env = envProvider().config;
-  const concurrency = PROVIDERS[id].fromEnv ? env.concurrency : CLOUD_CONCURRENCY;
-  return { provider: id, ...c.llm.profiles[id], timeoutMs: env.timeoutMs, concurrency };
+  const profile = c.llm.profiles[id];
+  const concurrency = PROVIDERS[id].fromEnv ? (localServers(c.llm.servers).find((s) => s.baseUrl === profile.baseUrl)?.concurrency ?? env.concurrency) : CLOUD_CONCURRENCY;
+  return { provider: id, ...profile, timeoutMs: env.timeoutMs, concurrency };
 }
 
 /** Returns an unsubscribe function. */
