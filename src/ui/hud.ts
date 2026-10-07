@@ -131,6 +131,7 @@ const NIGHT_STEP_NAME: Record<NightStep, string> = {
 };
 
 export interface GameUIOptions {
+  autoPlay?: boolean;
   /** Resuming a save: the replay rebuilds the log silently, then `restored()` sets the scene. */
   restoring: boolean;
   /** Game time already played (resumed games). */
@@ -244,6 +245,10 @@ export class GameUI {
     stage.highlightSelf(me);
   }
 
+  private get stepSpeech(): boolean {
+    return !this.opts.autoPlay && getConfig().stepSpeech;
+  }
+
   private view(): PlayerView {
     return this.game.viewFor(this.me);
   }
@@ -306,7 +311,7 @@ export class GameUI {
       h(
         'div',
         {},
-        h('div', { class: 'seat' }, `SEAT ${this.me + 1} · ${me.name}`),
+        h('div', { class: 'seat' }, `SEAT ${this.me + 1} · ${me.name}${this.opts.autoPlay ? ' · AI 代打（观看中）' : ''}`),
         h('div', { class: `role ${isWolf(me.role) ? 'wolf' : 'good'}` }, ROLE_NAME[me.role]),
         h('div', { class: 'desc' }, ROLE_DESC[me.role]),
         h('div', { class: 'items' }),
@@ -379,7 +384,7 @@ export class GameUI {
    * break (the human's own turn, a vote) comes through at once.
    */
   holdSpeech(speaker: number): Promise<void> {
-    if (speaker === this.me || !this.unreadSpeech || !getConfig().stepSpeech) return Promise.resolve();
+    if (speaker === this.me || !this.unreadSpeech || !this.stepSpeech) return Promise.resolve();
     return new Promise((resolve) => {
       const release = () => {
         if (this.held?.release !== release) return;
@@ -411,6 +416,12 @@ export class GameUI {
    * overhead until the human confirms, then walk out of town and night falls.
    */
   confirmExile(id: number): Promise<void> {
+    if (this.opts.autoPlay) {
+      this.bubbles.clear();
+      this.pendingExile.delete(id);
+      this.stage.exiled(id);
+      return Promise.resolve();
+    }
     return new Promise((resolve) => {
       const go = () => {
         if (this.exileWait !== go) return;
@@ -650,7 +661,7 @@ export class GameUI {
     const on = this.onSeat();
     const actor = this.visibleActor();
     // the human's own turn isn't "thinking": their words stay up and the card says it's them
-    const mine = i === this.me && actor === i;
+    const mine = !this.opts.autoPlay && i === this.me && actor === i;
     const thinking = ((actor === i && this.held?.speaker !== i) || this.ceremonyThinking === i) && !mine;
     const words = thinking ? null : this.latestWords(i);
     const alive = p.alive || this.revived;
@@ -758,6 +769,11 @@ export class GameUI {
   private failure: { answer: Promise<'retry' | 'fallback'>; more: HTMLElement; count: number } | null = null;
 
   askFailure(info: { player: number; kind: string; error: string }): Promise<'retry' | 'fallback'> {
+    if (this.opts.autoPlay) {
+      this.engineStats.fallback++;
+      this.renderEngine();
+      return Promise.resolve('fallback');
+    }
     if (this.failure) {
       const f = this.failure;
       f.more.textContent = `同时还有 ${++f.count} 个请求也失败了，你的选择对它们一起生效。`;
@@ -1171,7 +1187,7 @@ export class GameUI {
    */
   private cameraTarget(): number | null {
     const actor = this.visibleActor();
-    if (this.unreadSpeech && getConfig().stepSpeech && actor !== this.me && this.lastSpeaker !== null) return this.lastSpeaker;
+    if (this.unreadSpeech && this.stepSpeech && actor !== this.me && this.lastSpeaker !== null) return this.lastSpeaker;
     return actor;
   }
 
@@ -1181,7 +1197,7 @@ export class GameUI {
    * a vote takes over. The roster and banner point at them, not at the thinker.
    */
   private readingSpeaker(): number | null {
-    if (!this.unreadSpeech || !getConfig().stepSpeech || this.lastSpeaker === null) return null;
+    if (!this.unreadSpeech || !this.stepSpeech || this.lastSpeaker === null) return null;
     const s = this.game.state;
     if (s.actor !== null && (s.actor === this.me || !s.actorSpeaks)) return null;
     return this.lastSpeaker;
@@ -1625,7 +1641,7 @@ export class GameUI {
     const ceremony = new AwardCeremony({
       game: this.game,
       stage: this.stage,
-      me: this.me,
+      me: this.opts.autoPlay ? -1 : this.me,
       reviewers: this.reviewers.list,
       notes: this.reviewers.notes,
       log: (e) => {

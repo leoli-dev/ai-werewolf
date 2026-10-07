@@ -77,8 +77,8 @@ function toast(text: string) {
 
 /** Play one game (new, or resumed from `save`) until the player goes back to the title. */
 async function play(settings: Settings, save?: SaveGame) {
-  const { playerName, role, wolfChatRounds, godView, mode } = settings;
-  const prefs = { playerName, role, wolfChatRounds, godView, mode };
+  const { playerName, role, wolfChatRounds, godView, mode, autoPlay } = settings;
+  const prefs = { playerName, role, wolfChatRounds, godView, mode, autoPlay };
   const setupSeed = save?.setupSeed ?? (Math.random() * 2 ** 32) >>> 0;
   const rng = new Rng(setupSeed);
   const humanSeat = rng.int(12);
@@ -90,6 +90,7 @@ async function play(settings: Settings, save?: SaveGame) {
     {
       names,
       humanSeat,
+      autoPlay,
       humanRole: settings.role === 'random' ? undefined : settings.role,
       paceMs: settings.paceMs,
       wolfChatRounds: settings.wolfChatRounds,
@@ -119,6 +120,7 @@ async function play(settings: Settings, save?: SaveGame) {
   stage.setLooks(looks);
   ui = new GameUI(app, labels, stage, game, humanSeat, settings.godView, leave, looks, {
     restoring: !!save,
+    autoPlay,
     elapsedMs: save?.elapsedMs ?? 0,
     marks: save?.marks,
     onPause: () => void pause(),
@@ -128,7 +130,7 @@ async function play(settings: Settings, save?: SaveGame) {
   const queue = new RequestQueue(() => concurrencyOf(provider.config));
   ui.setEngineMode(settings.mode);
   const agents: (Agent & Partial<Snapshotting>)[] = names.map((_, i) => {
-    if (i === humanSeat) return ui!.agent;
+    if (i === humanSeat && !autoPlay) return ui!.agent;
     if (settings.mode === 'offline') return new MockAgent(rng.int(1e9), 600, styles[i]);
     return new LLMAgent(i, personas[i], provider, queue, {
       onCall: (c) => ui?.recordCall(c.ok, c.ms),
@@ -140,7 +142,7 @@ async function play(settings: Settings, save?: SaveGame) {
   ui.setPlaystyles(styles.map((s) => s?.name ?? null));
   // 颁奖典礼: every AI reviews the game (the human answers through the panel)
   ui.setReviewers(
-    agents.map((a, i) => (i === humanSeat ? null : (a as Agent & Reviewer))),
+    agents.map((a, i) => (i === humanSeat && !autoPlay ? null : (a as Agent & Reviewer))),
     () => agents.map((a) => (a instanceof LLMAgent ? a.notes : null)),
   );
   // 配置 changes made from the pause menu reach the running game
@@ -257,8 +259,8 @@ async function main() {
       const save = readSave();
       if (!save) continue;
       // the game's own choices from the save; pace and connection from 配置
-      const { playerName, role, wolfChatRounds, godView, mode } = save.prefs;
-      const settings: Settings = { playerName, role, wolfChatRounds, godView, mode, paceMs: getConfig().paceMs, provider: resolveProvider() };
+      const { playerName, role, wolfChatRounds, godView, mode, autoPlay = false } = save.prefs;
+      const settings: Settings = { playerName, role, wolfChatRounds, godView, mode, autoPlay, paceMs: getConfig().paceMs, provider: resolveProvider() };
       if (await keyReady(settings)) await play(settings, save);
       continue;
     }

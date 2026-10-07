@@ -29,6 +29,8 @@ export interface GameOptions {
   names: string[];
   /** Index of the human seat, or -1 for all-AI (tests / spectating). */
   humanSeat: number;
+  /** Keep the player seat / forced role, but treat it like every other AI. */
+  autoPlay?: boolean;
   /** Force the human's role (dev); otherwise random. */
   humanRole?: Role;
   seed?: number;
@@ -146,7 +148,7 @@ export class Game {
         name: opts.names[id] ?? `玩家${id + 1}`,
         role,
         alive: true,
-        isHuman: id === opts.humanSeat,
+        isHuman: id === opts.humanSeat && !opts.autoPlay,
       })),
       actor: null,
       actorLabel: '',

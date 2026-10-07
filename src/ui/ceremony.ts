@@ -148,7 +148,7 @@ export class AwardCeremony {
     await sleep(1200);
     if (this.dead) return;
     // the human joins in by hand, unless they are the one up there
-    const thrower = tally.worst.includes(host.me) ? null : host.me;
+    const thrower = host.me < 0 || tally.worst.includes(host.me) ? null : host.me;
     const storm = stage.poopStorm(tally.worst, thrower);
     void this.heckle(tally.worst);
     await storm;
@@ -177,7 +177,7 @@ export class AwardCeremony {
 
   /** Give the human time to read an AI's remarks: until 下一位 (逐条查看), or a reading-speed pause. */
   private async readPause(text: string, next: { id: number; name: string }) {
-    if (!getConfig().stepSpeech) {
+    if (this.host.me < 0 || !getConfig().stepSpeech) {
       await sleep(Math.min(9000, 2500 + text.length * 45));
       return;
     }

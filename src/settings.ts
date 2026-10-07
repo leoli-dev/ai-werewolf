@@ -44,6 +44,8 @@ export interface GamePrefs {
   role: Role | 'random';
   wolfChatRounds: number;
   godView: boolean;
+  /** Let AI control the player seat for the entire game. */
+  autoPlay: boolean;
 }
 
 /** Everything a game is started with (`provider` = the active profile, resolved). */
@@ -54,7 +56,7 @@ const GAME_KEY = 'ai-werewolf:settings:v1';
 const OLD_MUTE_KEY = 'ai-werewolf:muted';
 
 const DEFAULT_AUDIO: AudioLevels = { muted: false, music: 0.8, sfx: 0.8, ambience: 0.8 };
-const DEFAULT_GAME: GamePrefs = { playerName: '旅人', role: 'random', wolfChatRounds: 3, godView: false };
+const DEFAULT_GAME: GamePrefs = { playerName: '旅人', role: 'random', wolfChatRounds: 3, godView: false, autoPlay: false };
 
 function read<T>(key: string): Partial<T> {
   try {
@@ -179,8 +181,8 @@ export function onConfigChange(fn: (c: Config) => void): () => void {
 }
 
 export function loadGamePrefs(): GamePrefs {
-  const { playerName, role, wolfChatRounds, godView } = { ...DEFAULT_GAME, ...read<GamePrefs>(GAME_KEY) };
-  return { playerName, role, wolfChatRounds, godView };
+  const { playerName, role, wolfChatRounds, godView, autoPlay } = { ...DEFAULT_GAME, ...read<GamePrefs>(GAME_KEY) };
+  return { playerName, role, wolfChatRounds, godView, autoPlay };
 }
 
 export function saveGamePrefs(p: GamePrefs) {

@@ -26,6 +26,37 @@ describe('Game engine', () => {
     }
   });
 
+  it('AI takes over the player seat for every role and replay preserves the full game', async () => {
+    const roles: Role[] = ['villager', 'werewolf', 'wolfKing', 'seer', 'witch', 'hunter', 'guard'];
+    for (const [seed, role] of roles.entries()) {
+      const opts = { names, humanSeat: 3, humanRole: role, autoPlay: true, seed, wolfChatRounds: 2 };
+      const g = new Game(opts);
+      expect(g.players[3].role).toBe(role);
+      expect(g.players.every((p) => !p.isHuman)).toBe(true);
+      let playerActions = 0;
+      g.setAgents(names.map((_, id) => {
+        const ai = new MockAgent(seed * 31 + id);
+        return {
+          speak: (r, v) => {
+            if (id === 3) playerActions++;
+            return ai.speak(r, v);
+          },
+          choose: (r, v) => {
+            if (id === 3) playerActions++;
+            return ai.choose(r, v);
+          },
+        } satisfies Agent;
+      }));
+      expect(['good', 'wolf']).toContain(await g.run());
+      expect(playerActions).toBeGreaterThan(0);
+      const replay = new Game({ ...opts, replay: g.journal });
+      const unexpected = () => { throw new Error('A completed replay must not ask for input'); };
+      replay.setAgents(names.map(() => ({ speak: unexpected, choose: unexpected })));
+      expect(await replay.run()).toBe(g.state.winner);
+      expect(replay.events).toEqual(g.events);
+    }
+  });
+
   it('wolves win by 屠边 (every god or every villager out); good only once every wolf is out', () => {
     const kill = (g: Game, n: number, pred: (r: string) => boolean) => {
       for (const p of g.players.filter((p) => p.alive && pred(p.role)).slice(0, n)) p.alive = false;
