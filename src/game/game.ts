@@ -46,6 +46,16 @@ export interface GameOptions {
   replay?: Decision[];
 }
 
+/** `GameOptions` as needed to rebuild a game (see `Game.replayOptions`). */
+export interface ReplayOptions {
+  names: string[];
+  humanSeat: number;
+  autoPlay: boolean;
+  /** The role the human chose on the setup screen (null = random): it changes the deal. */
+  humanRole: Role | null;
+  wolfChatRounds: number;
+}
+
 export interface GameState {
   day: number;
   phase: Phase;
@@ -205,6 +215,12 @@ export class Game {
 
   get isPaused() {
     return this.paused;
+  }
+
+  /** The options that decide the deal and the flow: with `seed` and `journal`, a game can be rebuilt from them. */
+  get replayOptions(): ReplayOptions {
+    const { names, humanSeat, autoPlay = false, humanRole = null, wolfChatRounds = 3 } = this.opts;
+    return { names: names.slice(), humanSeat, autoPlay, humanRole, wolfChatRounds };
   }
 
   /** Still fast-forwarding through a save's journal. */
@@ -369,14 +385,18 @@ export class Game {
     if (this.aborted) throw new GameAborted();
   }
 
-  /** The agent's answer, or the recorded one while replaying a save. Journaled either way. */
-  private async answer(id: number, req: DecisionRequest): Promise<Decision> {
-    if (this.replaying) return this.replayed(req);
+  /** The agent's answer, or the recorded one while replaying a save. Journaled and logged either way. */
+  private async answer(id: number, req: DecisionRequest, label: string): Promise<{ rec: Decision; log: DecisionLog }> {
+    if (this.replaying) {
+      const rec = this.replayed(req);
+      return { rec, log: this.logDecision(id, req, label, rec) };
+    }
     const rec = await this.decide(id, req);
-    // journal before waiting out a pause, so a save made meanwhile keeps this answer
+    // journal and log before waiting out a pause, so a save or export made meanwhile has this answer
     this.journal.push(rec);
+    const log = this.logDecision(id, req, label, rec);
     await this.gate();
-    return rec;
+    return { rec, log };
   }
 
   /** The next recorded answer of the save being replayed. */
@@ -419,8 +439,7 @@ export class Game {
     this.guard();
     this.setActor(id, label, req.kind === 'speech');
     try {
-      const rec = await this.answer(id, req);
-      const log = this.logDecision(id, req, label, rec);
+      const { rec, log } = await this.answer(id, req, label);
       if ('t' in rec) return (log.resolved = this.checked(id, req as TargetRequest, rec.t));
       this.lastSpeechFallback = !!rec.fb;
       this.lastSpeechExplode = !!rec.x;

@@ -104,4 +104,44 @@ describe('game record', () => {
     const resumed = await play(5, undefined, g.journal.slice());
     expect(mergeTimeline(resumed.events, resumed.decisions)).toEqual(mergeTimeline(g.events, g.decisions));
   });
+
+  it('has an answer given while paused, before the game resumes', async () => {
+    const g = new Game({ names, humanSeat: -1, seed: 9, wolfChatRounds: 2 });
+    let first = true;
+    g.setAgents(names.map((_, i) => {
+      const m = new MockAgent(i);
+      return {
+        speak: (r, v) => m.speak(r, v),
+        choose: async (r, v) => {
+          if (first) g.pause(); // the host pauses while this answer is on its way
+          first = false;
+          return m.choose(r, v);
+        },
+      };
+    }));
+    const done = g.run().catch((e) => {
+      if (!(e instanceof GameAborted)) throw e;
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(g.isPaused).toBe(true);
+    expect(g.journal.length).toBeGreaterThan(0);
+    const r = buildRecord(g, ctx());
+    expect(r.timeline.filter((t) => t.kind === 'decision')).toHaveLength(g.journal.length);
+    g.abort();
+    await done;
+  });
+
+  it('rebuilds the exact game from its replay section, the chosen role included', async () => {
+    const live = new Game({ names, humanSeat: 3, humanRole: 'seer', seed: 11, wolfChatRounds: 2 });
+    live.setAgents(names.map((_, i) => new MockAgent(i)));
+    await live.run();
+    const { replay } = JSON.parse(JSON.stringify(buildRecord(live, ctx({ humanSeat: 3 })))) as ReturnType<typeof buildRecord>;
+    expect(replay.options.humanRole).toBe('seer');
+    const unexpected = () => Promise.reject(new Error('asked during replay'));
+    const g = new Game({ ...replay.options, humanRole: replay.options.humanRole ?? undefined, seed: replay.gameSeed, replay: replay.journal });
+    g.setAgents(names.map(() => ({ speak: unexpected, choose: unexpected })));
+    expect(await g.run()).toBe(live.state.winner);
+    expect(g.players.map((p) => p.role)).toEqual(live.players.map((p) => p.role));
+    expect(g.events.map((e) => e.text)).toEqual(live.events.map((e) => e.text));
+  });
 });

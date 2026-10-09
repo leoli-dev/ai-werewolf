@@ -1,4 +1,4 @@
-import type { Game } from './game';
+import type { Game, ReplayOptions } from './game';
 import {
   ROLE_NAME,
   STANDARD_BOARD,
@@ -43,8 +43,11 @@ export interface GameRecord {
   result: RecordResult | null;
   /** 颁奖典礼 (post-game remarks and award votes), once it has started. */
   ceremony: RecordCeremonyLine[] | null;
-  /** Seeds + every answer: enough for the engine to rebuild the game exactly. */
-  replay: { setupSeed: number; gameSeed: number; journal: Decision[] };
+  /**
+   * Seeds, the game options that shape the deal (the chosen role included) and
+   * every answer: `new Game({ ...options, seed: gameSeed, replay: journal })` rebuilds the game exactly.
+   */
+  replay: { setupSeed: number; gameSeed: number; options: ReplayOptions; journal: Decision[] };
 }
 
 export interface RecordGameInfo {
@@ -186,7 +189,7 @@ export function buildRecord(game: Game, ctx: RecordContext): GameRecord {
     },
     result: s.winner ? { winner: s.winner, days: s.day, survivors: game.aliveIds() } : null,
     ceremony: ctx.ceremony?.map((l) => ({ ...l })) ?? null,
-    replay: { setupSeed: ctx.setupSeed, gameSeed: game.seed, journal: game.journal.map((d) => ({ ...d })) },
+    replay: { setupSeed: ctx.setupSeed, gameSeed: game.seed, options: game.replayOptions, journal: game.journal.map((d) => ({ ...d })) },
   };
 }
 

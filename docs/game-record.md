@@ -24,7 +24,7 @@
 | `state` | 导出时的局面：天数、阶段、警长、女巫药水、猎人/狼王是否已开枪、上次守护、预言家查验、存活名单 |
 | `result` | 结束后：`{winner, days, survivors}`；进行中为 `null` |
 | `ceremony` | 颁奖典礼的感言、投票明细与结果（`speaker` 为 `null` 时是 GM 播报）；未开始为 `null` |
-| `replay` | `setupSeed`、`gameSeed`、`journal`：引擎可据此逐步重建整局 |
+| `replay` | `setupSeed`、`gameSeed`、`options`（名字、人类座位、所选身份 `humanRole`、AI 代打、狼队沟通轮数——都会影响发牌和流程）、`journal`：`new Game({ ...options, seed: gameSeed, replay: journal })` 可逐步重建整局 |
 
 死亡原因 `cause`：`wolf` 狼刀、`poison` 毒、`hunter` 猎人枪、`wolfKing` 狼王枪、`vote` 放逐、`explode` 自爆、`gm` 其他（GM 判定）。
 
