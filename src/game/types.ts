@@ -185,11 +185,47 @@ export type SpeechResult = string | { text: string; fallback?: boolean; explode?
  * at the same time (votes, 上警, 退水) answers are journaled as they come in,
  * tagged with their place in the round (`i`).
  */
-export type Decision = { t: number | null; i?: number } | { s: string; fb?: true; x?: true };
+export type Decision = { t: number | null; i?: number; r?: string; fb?: true } | { s: string; fb?: true; x?: true };
+
+/**
+ * A pick, optionally with the agent's own reason for it (kept in the game record);
+ * `fallback` marks a pick made by the rule AI instead of the model.
+ */
+export type TargetResult = number | null | { target: number | null; reason?: string; fallback?: boolean };
 
 export interface Agent {
   speak(req: SpeechRequest | WolfChatRequest, view: PlayerView): Promise<SpeechResult>;
-  choose(req: TargetRequest, view: PlayerView): Promise<number | null>;
+  choose(req: TargetRequest, view: PlayerView): Promise<TargetResult>;
+}
+
+/**
+ * One answer as the game took it, for the game record: who was asked what, what
+ * they answered, and what the GM made of it (an illegal pick replaced, a skip…).
+ */
+export interface DecisionLog {
+  /** Order among all decisions. */
+  seq: number;
+  /** How many events had been emitted when it was taken: it comes right before event `atEvent`. */
+  atEvent: number;
+  day: number;
+  phase: Phase;
+  actor: number;
+  /** What the HUD showed while asking (e.g. "放逐投票"). */
+  label: string;
+  request: DecisionRequest;
+  /** Speech / wolf chat: the words as given. */
+  text?: string;
+  /** Pick: the answer as given (null = skip, -1 = 自爆). */
+  choice?: number | null;
+  /** Pick: what the rules made of it (an illegal target is replaced). */
+  resolved?: number | null;
+  reason?: string;
+  /** Made by the rule AI because the model failed. */
+  fallback?: boolean;
+  /** The speech ended in a 自爆. */
+  explode?: boolean;
+  /** Given, but the round ended at someone's 自爆 before it counted. */
+  discarded?: boolean;
 }
 
 export type Winner = Team | null;
