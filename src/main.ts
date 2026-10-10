@@ -5,6 +5,7 @@ import { PERSONAS, TRAVELLER_LOOK } from './personas';
 import { dealPlaystyles } from './ai/playstyles';
 import { OpenAICompatibleProvider, RequestQueue, concurrencyOf } from './ai/provider';
 import { Game, GameAborted, ReplayMismatch } from './game/game';
+import { buildRecord, recordFileName, recordSummary } from './game/record';
 import { Rng } from './game/rng';
 import type { Agent } from './game/types';
 import type { Reviewer } from './game/ceremony';
@@ -124,6 +125,7 @@ async function play(settings: Settings, save?: SaveGame) {
     elapsedMs: save?.elapsedMs ?? 0,
     marks: save?.marks,
     onPause: () => void pause(),
+    onExport: () => toast(`已导出对局记录：${exportRecord()}`),
   });
 
   const provider = new OpenAICompatibleProvider(settings.provider, (id) => vault.getKey(id));
@@ -169,6 +171,23 @@ async function play(settings: Settings, save?: SaveGame) {
       meta: { seat: humanSeat, role: game.players[humanSeat].role, day: s.day, phase: s.phase, alive: game.alive().length },
     };
   };
+  // ── 导出记录 ──
+  const exportRecord = (): string => {
+    const record = buildRecord(game, {
+      setupSeed,
+      humanSeat,
+      autoPlay,
+      engine: settings.mode,
+      llm: { provider: provider.config.provider, model: provider.config.model },
+      wolfChatRounds: settings.wolfChatRounds,
+      elapsedMs: ui!.elapsedMs,
+      playstyles: styles.map((s) => s?.name ?? null),
+      notes: agents.map((a) => (a instanceof LLMAgent ? a.notes : null)),
+      ceremony: ui!.ceremonyLines,
+    });
+    download(recordFileName(record), JSON.stringify(record, null, 2));
+    return recordSummary(record);
+  };
   let pausing = false;
   const pause = async () => {
     if (pausing) return;
@@ -194,6 +213,7 @@ async function play(settings: Settings, save?: SaveGame) {
         }
         return err;
       },
+      exportRecord: () => `已导出：${exportRecord()}`,
       dirty: () => game.journal.length !== savedLen || JSON.stringify(ui!.playerMarks) !== savedMarks,
       config: () => showConfig(app, { inGame: settings.mode }),
     });
@@ -229,6 +249,15 @@ async function play(settings: Settings, save?: SaveGame) {
   ui.destroy();
   audio.setEnding(null);
   stage.resetAll();
+}
+
+function download(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const a = h('a', { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 interface Snapshotting {

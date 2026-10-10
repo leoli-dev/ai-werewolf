@@ -24,6 +24,7 @@ import { h } from './dom';
 import { showRules } from './rules';
 import { AwardCeremony, type CeremonyEntry } from './ceremony';
 import type { Reviewer } from '../game/ceremony';
+import type { RecordCeremonyLine } from '../game/record';
 
 const ROLE_DESC: Record<Role, string> = {
   werewolf: '每晚与狼队商量并投票杀人；白天伪装成好人。屠边（神职或村民全灭）即胜。',
@@ -139,6 +140,8 @@ export interface GameUIOptions {
   /** The human's 民/神/狼 marks (resumed games). */
   marks?: (Mark | null)[];
   onPause: () => void;
+  /** 导出记录: download the game record so far. */
+  onExport: () => void;
 }
 
 export class GameUI {
@@ -270,6 +273,11 @@ export class GameUI {
     if (isWolf(k) && isWolf(this.game.players[this.me].role)) return { text: k === 'wolfKing' ? '狼王队友' : '狼队友', cls: 'wolf' };
     if (ring) return { text: `查验：${ring === 'wolf' ? '狼人' : '好人'}`, cls: ring, ring };
     return null;
+  }
+
+  /** The 颁奖典礼 so far (null before it starts), for the game record. */
+  get ceremonyLines(): RecordCeremonyLine[] | null {
+    return this.ceremonyLog?.map((e) => (e.kind === 'say' ? { speaker: e.id, tag: e.tag, text: e.text, ...(e.fallback ? { fallback: true } : {}) } : { speaker: null, tag: null, text: e.text })) ?? null;
   }
 
   /** For the save. */
@@ -1678,7 +1686,7 @@ export class GameUI {
         this.action.replaceChildren(
           h('div', { class: 'title' }, '🎉 颁奖典礼结束'),
           h('div', { class: 'hint' }, '感谢参与！可以在「颁奖典礼」页回看所有赛后感言和投票明细。'),
-          h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => this.close() }, '继续围观'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
+          h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => this.close() }, '继续围观'), h('button', { class: 'btn', onclick: () => this.opts.onExport() }, '导出记录'), h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面')),
         );
         this.action.classList.add('show');
       },
@@ -1724,6 +1732,7 @@ export class GameUI {
             this.reviewers && !this.ceremonyLog
               ? h('button', { class: 'btn award', title: '全员复活，赛后测评、投票选出全场最佳与最差', onclick: () => { back.remove(); this.startCeremony(); } }, '🏆 颁奖典礼')
               : null,
+            h('button', { class: 'btn', title: '下载整局对局记录（JSON）', onclick: () => this.opts.onExport() }, '导出记录'),
             h('button', { class: 'btn primary', onclick: () => this.onRestart() }, '回到标题画面'),
           ),
         ),

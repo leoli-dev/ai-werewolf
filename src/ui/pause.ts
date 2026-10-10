@@ -9,11 +9,13 @@ export interface PauseMenu {
   save(): string | null;
   /** Progress made since the last save. */
   dirty(): boolean;
+  /** Download the game record so far; returns a line for the note. */
+  exportRecord(): string;
   /** Open 配置 over the menu; resolves when it closes. */
   config(): Promise<void>;
 }
 
-/** Pause screen: 继续游戏 / 保存游戏 / 配置 / 回到标题画面. Esc resumes. */
+/** Pause screen: 继续游戏 / 保存游戏 / 导出记录 / 配置 / 回到标题画面. Esc resumes. */
 export function showPause(root: HTMLElement, m: PauseMenu): Promise<'resume' | 'title'> {
   return new Promise((resolve) => {
     const finish = (v: 'resume' | 'title') => {
@@ -31,6 +33,14 @@ export function showPause(root: HTMLElement, m: PauseMenu): Promise<'resume' | '
     };
     const resumeBtn = h('button', { class: 'title-opt', onclick: () => finish('resume') }, '继续游戏');
     const saveBtn = h('button', { class: 'title-opt', disabled: !!m.cannotSave, onclick: save }, '保存游戏');
+    const exportBtn = h('button', {
+      class: 'title-opt',
+      title: '下载到目前为止的完整对局记录（JSON）',
+      onclick: () => {
+        note.className = 'pause-note ok';
+        note.textContent = m.exportRecord();
+      },
+    }, '导出记录');
     let inConfig = false;
     const configBtn = h('button', {
       class: 'title-opt',
@@ -42,7 +52,7 @@ export function showPause(root: HTMLElement, m: PauseMenu): Promise<'resume' | '
       },
     }, '配置');
     const titleBtn = h('button', { class: 'title-opt', onclick: () => (m.dirty() ? askLeave() : finish('title')) }, '回到标题画面');
-    const menu = h('nav', { class: 'title-menu' }, resumeBtn, saveBtn, configBtn, titleBtn, note);
+    const menu = h('nav', { class: 'title-menu' }, resumeBtn, saveBtn, exportBtn, configBtn, titleBtn, note);
 
     // leaving with unsaved progress: offer to save first
     const askLeave = () => {

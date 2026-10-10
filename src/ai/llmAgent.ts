@@ -1,4 +1,4 @@
-import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, WolfChatRequest } from '../game/types';
+import type { Agent, PlayerView, SpeechRequest, SpeechResult, TargetRequest, TargetResult, WolfChatRequest } from '../game/types';
 import { EXPLODE_CHOICE, YES_NO_ACTIONS, seat, type TargetAction } from '../game/types';
 
 const NOTE_TAG: Record<TargetAction, string> = {
@@ -170,7 +170,7 @@ export class LLMAgent implements Agent, Reviewer {
     }
   }
 
-  async choose(req: TargetRequest, view: PlayerView): Promise<number | null> {
+  async choose(req: TargetRequest, view: PlayerView): Promise<TargetResult> {
     while (true) {
       let raw = '';
       let parsed: ReturnType<typeof parseTarget>;
@@ -191,19 +191,19 @@ export class LLMAgent implements Agent, Reviewer {
         }
       } catch (e) {
         if (await this.shouldRetry(req.action, (e as Error).message)) continue;
-        return this.fallback.choose(req, view);
+        return { target: await this.fallback.choose(req, view), fallback: true };
       }
       const { target, reason } = parsed;
       if (target === undefined) {
         if (await this.shouldRetry(req.action, `模型给出的目标不在可选号码内或无法解析：${raw.slice(0, 80)}`)) continue;
-        return this.fallback.choose(req, view);
+        return { target: await this.fallback.choose(req, view), fallback: true };
       }
       const tag = NOTE_TAG[req.action];
       const night = ['seer', 'guard', 'wolfKill', 'witchSave', 'witchPoison'].includes(req.action);
       const what = YES_NO_ACTIONS.includes(req.action) ? (target === EXPLODE_CHOICE ? '：自爆' : target === null ? '：否' : '：是') : target === null ? '：放弃' : ` ${seat(target)}`;
       this.notes.push(`第${req.day}${night ? '夜' : '天'}${tag}${what}${reason ? `（${reason}）` : ''}`);
       if (this.notes.length > 40) this.notes.splice(0, this.notes.length - 40);
-      return target;
+      return reason ? { target, reason } : target;
     }
   }
 }
